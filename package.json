@@ -7,7 +7,8 @@
 		"deps": "npm ci && cd frontend-vite && npm ci && cd ..",
 		"build": "tsc",
 		"buildall": "tsc && cd frontend-vite && npm run build && cd ..",
-		"lint": "npm run lint --prefix frontend-vite",
+		"lint": "eslint src tests vitest.config.mts --max-warnings 0 && npm run lint --prefix frontend-vite",
+		"typecheck": "tsc --noEmit && tsc --project tsconfig.test.json && npm run typecheck --prefix frontend-vite",
 		"watch": "tsc && concurrently \"tsc -w\" \"nodemon dist\"",
 		"start": "NODE_ENV=production node ./dist/server.js",
 		"test": "vitest run",
@@ -29,10 +30,10 @@
 		"koa-bodyparser": "^4.4.1",
 		"koa-static": "^5.0.0",
 		"nodemailer": "^6.9.7",
-		"ts-node": "^10.9.2",
 		"validator": "^13.11.0"
 	},
 	"devDependencies": {
+		"@eslint/js": "^10.0.1",
 		"@types/better-sqlite3": "^7.6.8",
 		"@types/js-yaml": "^4.0.9",
 		"@types/koa": "^2.13.12",
@@ -43,8 +44,12 @@
 		"@types/nodemailer": "^6.4.14",
 		"@types/node": "^24.0.0",
 		"@types/validator": "^13.11.7",
+		"eslint": "^10.14.0",
+		"globals": "^17.0.0",
 		"prettier": "^3.2.2",
+		"ts-node": "^10.9.2",
 		"typescript": "^5.9.3",
+		"typescript-eslint": "^8.72.2",
 		"vite": "^7.3.0",
 		"vitest": "^5.1.0"
 	}

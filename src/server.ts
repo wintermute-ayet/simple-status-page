@@ -56,6 +56,10 @@ async function startServer() {
 
 	const router = new Router();
 
+	router.get("/healthz", (ctx: Context) => {
+		ctx.body = { status: "ok" };
+	});
+
 	const monitorRetries: Record<number, number> = {};
 	const monitorLastApiStatus: Record<number, [string, number, number]> = {};
 
@@ -166,8 +170,8 @@ async function startServer() {
 	};
 
 	const checkHTTPMonitor = async (monitor: MonitorEntity) => {
-		let status: string = "down";
-		let responseTime: number = 0;
+		let status: string;
+		const responseTime: number = 0;
 
 		const startTime = Date.now();
 		try {

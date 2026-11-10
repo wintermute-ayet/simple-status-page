@@ -5,3 +5,6 @@ dist
 frontend-vite/node_modules
 frontend-vite/dist
 .vscode
+.vitest/
+coverage/
+*.tsbuildinfo

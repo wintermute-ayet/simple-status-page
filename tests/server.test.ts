@@ -106,6 +106,14 @@ async function exhaustRetries() {
 	mocks.resolveIncident.mockClear();
 }
 
+it("serves the container health check", async () => {
+	const route = router.stack.find((layer) => layer.path === "/healthz");
+	expect(route).toBeDefined();
+	const ctx = {} as Router.RouterContext;
+	await route!.stack[0](ctx, async () => {});
+	expect(ctx.body).toEqual({ status: "ok" });
+});
+
 describe("API monitor checks", () => {
 	it("waits for the retry threshold, then records down when no report exists", async () => {
 		await vi.advanceTimersByTimeAsync(checkInterval * (retries - 1));
