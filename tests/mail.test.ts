@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MailQueue, smtpOptions, type MailTransport } from "../src/mail";
+import nodemailer from "nodemailer";
+import {
+	createMailQueue,
+	isSubscriptionAddress,
+	MailQueue,
+	smtpOptions,
+	type MailTransport
+} from "../src/mail";
 import { testEmail } from "./helpers";
 
 let queue: MailQueue;
@@ -101,4 +108,38 @@ it.each([25, 465, 587])("sets SMTP TLS and connection deadlines for port %i", (p
 	expect(options.requireTLS).toBe(port === 587);
 	expect(options.connectionTimeout).toBe(5000);
 	expect(options.socketTimeout).toBe(5000);
+});
+
+it.each([25, 465, 587])("selects the Nodemailer transport security for port %i", (port) => {
+	const create = vi.spyOn(nodemailer, "createTransport");
+	queue = createMailQueue({
+		host: "smtp.example.com",
+		from: testEmail,
+		username: "",
+		password: "",
+		port
+	})!;
+	expect(queue).toBeInstanceOf(MailQueue);
+	expect(create).toHaveBeenCalledExactlyOnceWith(
+		expect.objectContaining({ port, secure: port === 465, requireTLS: port === 587 })
+	);
+});
+
+it("disables the transport without SMTP and limits subscription addresses to 254 bytes", () => {
+	expect(createMailQueue(undefined)).toBeUndefined();
+	const domain = ["a".repeat(63), "b".repeat(63), "c".repeat(61)].join(".");
+	const maximum = ["x".repeat(64), domain].join("@");
+	expect(maximum).toHaveLength(254);
+	expect(isSubscriptionAddress(maximum)).toBe(true);
+	for (const address of [
+		maximum + "x",
+		["é".repeat(33), domain].join("@"),
+		`Display Name <${testEmail}>`,
+		`${testEmail},${testEmail}`,
+		`${testEmail}\r\nBcc: ${testEmail}`,
+		"invalid",
+		undefined,
+		[]
+	])
+		expect(isSubscriptionAddress(address)).toBe(false);
 });

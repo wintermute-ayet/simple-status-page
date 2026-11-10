@@ -5,7 +5,6 @@ import serve from "koa-static";
 import path from "node:path";
 import cors from "@koa/cors";
 import consoleStamp from "console-stamp";
-import validator from "validator";
 import { readConfig, type Config, type MonitorStatus } from "./config";
 import {
 	initializeDatabase,
@@ -22,7 +21,7 @@ import {
 } from "./database";
 import type { Database } from "better-sqlite3";
 import migrateDatabase from "./database-migrations";
-import { createMailQueue, type MailQueue } from "./mail";
+import { createMailQueue, isSubscriptionAddress, type MailQueue } from "./mail";
 import { MonitorRuntime, type HttpRequest } from "./monitors";
 import { installProcessHandlers } from "./lifecycle";
 import { StatusCache, readIndexTemplate } from "./status";
@@ -210,7 +209,7 @@ export function createApplication(
 		const body: unknown = ctx.request.body;
 		const email =
 			typeof body === "object" && body !== null && "email" in body ? body.email : undefined;
-		if (typeof email !== "string" || !validator.isEmail(email)) ctx.throw(400, "Invalid email");
+		if (!isSubscriptionAddress(email)) ctx.throw(400, "Invalid email");
 		if (addSubscriber(db, email)) {
 			const link = links.create(email, "confirm");
 			const delivered = await mail.send({
@@ -227,8 +226,7 @@ export function createApplication(
 	router.get("/api/confirm-subscription", (ctx: Context) => {
 		const { email } = ctx.query;
 		if (
-			typeof email !== "string" ||
-			!validator.isEmail(email) ||
+			!isSubscriptionAddress(email) ||
 			!links.verify(email, "confirm", ctx.query) ||
 			!getSubscriber(db, email)
 		) {
@@ -240,11 +238,7 @@ export function createApplication(
 	});
 	router.get("/api/unsubscribe", (ctx: Context) => {
 		const { email } = ctx.query;
-		if (
-			typeof email !== "string" ||
-			!validator.isEmail(email) ||
-			!links.verify(email, "unsubscribe", ctx.query)
-		) {
+		if (!isSubscriptionAddress(email) || !links.verify(email, "unsubscribe", ctx.query)) {
 			ctx.redirect("/?result=unsubscribe-error");
 			return;
 		}

@@ -123,7 +123,7 @@ of the configuration parameters:
 
 ### Prerequisites
 
-- Node.js (v18+ recommended)
+- Node.js 20 or newer (Node 24 recommended and used by the container)
 - npm
 
 ### Installation
@@ -338,21 +338,46 @@ The subscribe endpoint is disabled without SMTP. With SMTP, every subscription a
 a limit of 5 per client IP per 15 minutes and 100 globally per hour. Excess requests return 429 with
 `Retry-After` in seconds. These fixed-window counters are in memory and reset on restart.
 
+Subscribe, confirm and unsubscribe accept only a single valid email address, limited to 254 UTF-8
+bytes. Oversized input, address lists, display-name forms and header injection are rejected before
+mail delivery. Nodemailer 10.5.0 supplies its own TypeScript declarations; no separate type package
+is required. SMTP transport selection remains implicit TLS on 465, required STARTTLS on 587, and
+neither implicit TLS nor required STARTTLS on 25.
+
 ### Dependency audit follow-up
 
-Non-force `npm audit fix` was run for both projects. The lockfile now resolves `validator` to
-13.15.35 with no reported advisory. The remaining reports on 2026-11-10 are:
+Non-force `npm audit fix` was run for both projects, followed by an explicit Nodemailer upgrade to
+10.5.0. The lockfile resolves `validator` to 13.15.35. Reports on 2026-11-10 are:
 
 | Project              | Remaining report                                                             | Follow-up                                                                                       |
 | -------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Server production    | Nodemailer 6.10.1: high severity                                             | The suggested fix is the major upgrade to 10.5.0; deferred for compatibility review.            |
+| Server production    | Zero findings after upgrading Nodemailer to 10.5.0                           | `npm audit --omit=dev` exits 0: `found 0 vulnerabilities`.                                      |
 | Server development   | 10 moderate package findings from minimatch through ESLint/typescript-eslint | Review the toolchain dependency upgrade when a compatible fix is available.                     |
 | Frontend production  | React Router/react-router-dom: 2 moderate; Zod: 1 high                       | Remove these dependencies in the planned frontend slimming commit.                              |
 | Frontend development | Vite: 1 high; esbuild and the plugin-react dependency chain: 2 moderate      | Update the frontend build toolchain separately; the suggested audit fix changes major versions. |
 
-The full audits therefore report 11 server findings (10 moderate, 1 high) and 6 frontend findings (4
-moderate, 2 high). `npm audit --omit=dev` reports 1 high server finding and 3 frontend findings (2
-moderate, 1 high). Audit reports remain non-blocking in CI; no forced upgrades were applied.
+The full server audit reports 10 moderate development findings from
+[GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) through the lint toolchain;
+these packages are excluded from the production image. The full frontend audit reports 6 findings (4
+moderate, 2 high); its production-only audit reports 3 (2 moderate, 1 high). These reports still
+exit 1. No forced upgrades were applied.
+
+Applicability assessment based on the advisories and current frontend code:
+
+- [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) concerns oversized array
+  validation. The subscription form validates one email string and has no array schemas; that
+  vulnerable path is unused. The server uses `validator`, not Zod.
+- [GHSA-wrjc-x8rr-h8h6](https://github.com/advisories/GHSA-wrjc-x8rr-h8h6) concerns
+  attacker-supplied navigation targets. This app uses `BrowserRouter` and `useLocation` without
+  `Link` or `useNavigate`, so the affected navigation path is absent.
+- [GHSA-337j-9hxr-rhxg](https://github.com/advisories/GHSA-337j-9hxr-rhxg) concerns data/framework
+  routing with manual SSR hydration. This app uses declarative routing and `createRoot`, without
+  that hydration/error-deserialization path.
+
+The production frontend findings are not applicable to these current code paths, but remain in the
+audit output. Remove the flagged frontend dependencies in commit 6 and reassess if routing or form
+schemas change. Vite/esbuild findings affect development tooling; production serves static assets
+through Koa. CI continues to report both project audits without blocking on them.
 
 ## Daily history, snapshots and preflight checks
 

@@ -255,6 +255,40 @@ describe("server routes", () => {
 });
 
 describe("subscription routes", () => {
+	it.each([
+		["x".repeat(64), ["a".repeat(63), "b".repeat(63), "c".repeat(62)].join(".")].join("@"),
+		`${testEmail}\r\nBcc: ${testEmail}`,
+		`${testEmail},${testEmail}`,
+		`Display Name <${testEmail}>`
+	])("rejects malformed or oversized recipients before mail.send (%#)", async (email) => {
+		const fixture = mailFixture();
+		const send = vi.spyOn(fixture.mail, "send");
+		const url = await start(fixture.config, fixture.mail);
+		expect((await subscribe(url, email)).status).toBe(400);
+		expect(send).not.toHaveBeenCalled();
+		expect(fixture.sendMail).not.toHaveBeenCalled();
+		expect(getSubscriber(db, email)).toBeUndefined();
+	});
+	it("rejects oversized addresses in signed confirm and unsubscribe links", async () => {
+		const fixture = mailFixture();
+		const url = await start(fixture.config, fixture.mail);
+		const email = ["x".repeat(64), ["a".repeat(63), "b".repeat(63), "c".repeat(62)].join(".")].join(
+			"@"
+		);
+		expect(email).toHaveLength(255);
+		addSubscriber(db, email);
+		const links = new SubscriptionLinks(fixture.config.salt, fixture.config.public.basedomain);
+		for (const purpose of ["confirm", "unsubscribe"] as const) {
+			const response = await fetch(url + localPath(links.create(email, purpose)), {
+				redirect: "manual"
+			});
+			expect(response.headers.get("Location")).toBe(
+				`/?result=${purpose === "confirm" ? "subscribe" : "unsubscribe"}-error`
+			);
+			expect(getSubscriber(db, email)?.active).toBe(0);
+		}
+		expect(fixture.sendMail).not.toHaveBeenCalled();
+	});
 	it("uses the nearest forwarded client address rather than attacker-controlled prefixes", async () => {
 		const fixture = mailFixture();
 		const url = await start(

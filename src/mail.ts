@@ -1,5 +1,15 @@
 import nodemailer, { type SendMailOptions } from "nodemailer";
 import type { SmtpConfig } from "./config";
+import validator from "validator";
+
+export function isSubscriptionAddress(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length <= 254 &&
+		Buffer.byteLength(value, "utf8") <= 254 &&
+		validator.isEmail(value)
+	);
+}
 
 export interface MailTransport {
 	sendMail(options: SendMailOptions): Promise<unknown>;
