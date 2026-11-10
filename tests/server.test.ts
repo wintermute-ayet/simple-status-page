@@ -1,193 +1,97 @@
-import { createServer } from "node:http";
-import Koa from "koa";
-import Router from "@koa/router";
+import type { Database } from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Config } from "../src/config";
+import { createApplication, parseReport } from "../src/server";
+import { initializeDatabase, type MonitorState } from "../src/database";
+import migrateDatabase from "../src/database-migrations";
+import { close, listen, makeConfig, testEmail, testToken } from "./helpers";
 
-const mocks = vi.hoisted(() => ({
-	readConfig: vi.fn(),
-	db: {},
-	addMonitorStatus: vi.fn(),
-	createIncident: vi.fn(),
-	resolveIncident: vi.fn()
-}));
-
-vi.mock("../src/config", () => ({ readConfig: mocks.readConfig }));
-vi.mock("../src/database", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../src/database")>()),
-	initializeDatabase: () => mocks.db,
-	addMonitorStatus: mocks.addMonitorStatus,
-	createIncident: mocks.createIncident,
-	resolveIncident: mocks.resolveIncident,
-	getActiveSubscribers: () => [],
-	cleanupTables: vi.fn()
-}));
-vi.mock("../src/database-migrations", () => ({ default: vi.fn() }));
-vi.mock("console-stamp", () => ({ default: vi.fn() }));
-vi.mock("nodemailer", () => ({
-	default: { createTransport: () => ({ sendMail: vi.fn() }) }
-}));
-
-const checkInterval = 1000;
-const retries = 3;
-let config: Config;
-let router: Router;
-
-beforeEach(async () => {
-	vi.resetModules();
-	vi.useFakeTimers();
-	vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+let db: Database;
+let service: ReturnType<typeof createApplication>;
+let listener: Awaited<ReturnType<typeof listen>> | undefined;
+beforeEach(() => {
+	db = initializeDatabase(":memory:");
+	migrateDatabase(db);
 	vi.spyOn(console, "info").mockImplementation(() => {});
-	vi.spyOn(console, "log").mockImplementation(() => {});
-	// Keep the real route registration and timers, without opening a listening socket.
-	vi.spyOn(Koa.prototype, "listen").mockReturnValue(createServer());
-	const registrations = vi.spyOn(Router.prototype, "get");
-	config = {
-		public: {
-			favicon: "",
-			logo: "",
-			companyName: "Example",
-			refreshInterval: 60,
-			basedomain: "https://example.com"
-		},
-		salt: "test-salt",
-		smtp: { host: "localhost", from: "Example", port: 25, username: "", password: "" },
-		groups: [],
-		database: { path: ":memory:" },
-		monitors: [
-			{
-				id: 1,
-				name: "Push monitor",
-				description: "",
-				uuid: "test-monitor-token",
-				visible: true,
-				type: "api",
-				url: "",
-				checkInterval,
-				retries,
-				timeoutDownMs: 1000,
-				timeoutDegradedMs: 500,
-				uptimeWording: "uptime",
-				group: "",
-				regexp: "",
-				validStatusCodes: [200],
-				incidents: {
-					down: { createAfter: 1, resolveAfter: 1, message: "Test outage" },
-					degraded: { createAfter: 1, resolveAfter: 1, message: "Test degradation" }
-				}
-			}
-		]
-	};
-	mocks.readConfig.mockReturnValue(config);
-	await import("../src/server");
-	router = registrations.mock.contexts[0] as Router;
 });
-
-afterEach(() => {
-	vi.clearAllTimers();
-	vi.useRealTimers();
+afterEach(async () => {
+	if (listener) await close(listener.server);
+	await service?.runtime.stop();
+	service?.mail?.close();
+	await service?.mail?.drain();
+	db.close();
+	listener = undefined;
 });
-
-async function report(status: string, value = 0) {
-	const route = router.stack.find((layer) => layer.path === "/api/monitor/test-monitor-token");
-	expect(route).toBeDefined();
-	const ctx = {
-		request: { query: { status, value: String(value) } }
-	} as unknown as Router.RouterContext;
-	await route!.stack[0](ctx, async () => {});
-	expect(ctx.body).toEqual({ status: "ok" });
+async function start() {
+	service = createApplication(makeConfig(), db);
+	listener = await listen(service.app);
+	return listener.url;
 }
 
-async function exhaustRetries() {
-	await vi.advanceTimersByTimeAsync(checkInterval * 10);
-	expect(mocks.addMonitorStatus).toHaveBeenLastCalledWith(mocks.db, 1, "down", 0);
-	mocks.addMonitorStatus.mockClear();
-	mocks.createIncident.mockClear();
-	mocks.resolveIncident.mockClear();
-}
-
-it("serves the container health check", async () => {
-	const route = router.stack.find((layer) => layer.path === "/healthz");
-	expect(route).toBeDefined();
-	const ctx = {} as Router.RouterContext;
-	await route!.stack[0](ctx, async () => {});
-	expect(ctx.body).toEqual({ status: "ok" });
+describe("server routes", () => {
+	it("serves health and disables subscription routes/UI data without SMTP", async () => {
+		const url = await start();
+		expect(await (await fetch(url + "/healthz")).json()).toEqual({ status: "ok" });
+		const overview = (await (await fetch(url + "/api/overview")).json()) as {
+			public: { subscriptionsEnabled: boolean };
+		};
+		expect(overview.public.subscriptionsEnabled).toBe(false);
+		expect(
+			(
+				await fetch(url + "/api/subscribe", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ email: testEmail })
+				})
+			).status
+		).toBe(404);
+	});
+	it("preserves GET push compatibility and persists the report before the interval", async () => {
+		const url = await start();
+		expect(
+			await (await fetch(`${url}/api/monitor/${testToken}?status=up&value=12.5`)).json()
+		).toEqual({ status: "ok" });
+		expect(db.prepare("SELECT * FROM monitor_state").get()).toMatchObject({
+			last_status: "up",
+			last_value: 12.5
+		});
+		await service.runtime.checkApiMonitor(makeConfig().monitors[0]);
+		const overview = (await (await fetch(url + "/api/overview")).json()) as {
+			monitors: { status: string }[];
+		};
+		expect(overview.monitors[0].status).toBe("up");
+	});
+	it("validates monitor ids and finite report values", async () => {
+		const url = await start();
+		for (const id of ["", "NaN", "Infinity", "1x", "1.5", "-1", "9007199254740993"])
+			expect((await fetch(`${url}/api/monitor?id=${id}`)).status).toBe(400);
+		expect((await fetch(url + "/api/monitor")).status).toBe(400);
+		expect((await fetch(url + "/api/monitor?id=2")).status).toBe(404);
+		for (const value of ["NaN", "Infinity", "", "12abc"])
+			expect((await fetch(`${url}/api/monitor/${testToken}?status=up&value=${value}`)).status).toBe(
+				400
+			);
+		expect(db.prepare("SELECT * FROM monitor_state").all()).toEqual([]);
+	});
+	it("returns persisted latest status before another scheduled check", async () => {
+		const config = makeConfig();
+		service = createApplication(config, db);
+		service.runtime.receiveReport(1, "degraded", 8);
+		await service.runtime.checkApiMonitor(config.monitors[0]);
+		await service.runtime.stop();
+		service = createApplication(config, db);
+		listener = await listen(service.app);
+		const overview = (await (await fetch(listener.url + "/api/overview")).json()) as {
+			monitors: { status: string }[];
+		};
+		expect(overview.monitors[0].status).toBe("degraded");
+		expect((db.prepare("SELECT * FROM monitor_state").get() as MonitorState).up_count).toBe(1);
+	});
 });
 
-describe("API monitor checks", () => {
-	it("waits for the retry threshold, then records down when no report exists", async () => {
-		await vi.advanceTimersByTimeAsync(checkInterval * (retries - 1));
-		expect(mocks.addMonitorStatus).not.toHaveBeenCalled();
-		await vi.advanceTimersByTimeAsync(checkInterval);
-		expect(mocks.addMonitorStatus).toHaveBeenCalledExactlyOnceWith(mocks.db, 1, "down", 0);
-		expect(mocks.createIncident).toHaveBeenCalledWith(mocks.db, 1, "down", "Test outage");
-	});
-
-	it.each(["up", "degraded", "down"])(
-		"records a fresh %s report and its value on the first check after a long outage",
-		async (status) => {
-			await exhaustRetries();
-			await report(status, 37);
-			await vi.advanceTimersByTimeAsync(checkInterval);
-			expect(mocks.addMonitorStatus).toHaveBeenCalledExactlyOnceWith(mocks.db, 1, status, 37);
-			if (status === "up") {
-				expect(mocks.resolveIncident).toHaveBeenCalledWith(mocks.db, 1, "down");
-				expect(mocks.resolveIncident).toHaveBeenCalledWith(mocks.db, 1, "degraded");
-				expect(mocks.createIncident).not.toHaveBeenCalled();
-			} else {
-				expect(mocks.createIncident).toHaveBeenCalledExactlyOnceWith(
-					mocks.db,
-					1,
-					status,
-					status === "down" ? "Test outage" : "Test degradation"
-				);
-			}
-		}
-	);
-
-	it("accepts a recovered report exactly at the freshness boundary", async () => {
-		await exhaustRetries();
-		await report("up", 42);
-		vi.setSystemTime(Date.now() + checkInterval * (retries - 1));
-		await vi.advanceTimersByTimeAsync(checkInterval);
-		expect(mocks.addMonitorStatus).toHaveBeenCalledExactlyOnceWith(mocks.db, 1, "up", 42);
-	});
-
-	it("continues tracking down when the last report is one millisecond too old", async () => {
-		await exhaustRetries();
-		await report("up", 42);
-		vi.setSystemTime(Date.now() + checkInterval * (retries - 1) + 1);
-		await vi.advanceTimersByTimeAsync(checkInterval);
-		expect(mocks.addMonitorStatus).toHaveBeenCalledExactlyOnceWith(mocks.db, 1, "down", 0);
-		expect(mocks.createIncident).toHaveBeenCalledWith(mocks.db, 1, "down", "Test outage");
-	});
-
-	it("resets the retry counter after recovery", async () => {
-		await exhaustRetries();
-		await report("up", 37);
-		await vi.advanceTimersByTimeAsync(checkInterval);
-		mocks.addMonitorStatus.mockClear();
-		// Let that report expire without running intermediate checks.
-		vi.setSystemTime(Date.now() + checkInterval * retries);
-		await vi.advanceTimersByTimeAsync(checkInterval);
-		expect(mocks.addMonitorStatus).toHaveBeenCalledExactlyOnceWith(mocks.db, 1, "up", 37);
-		await vi.advanceTimersByTimeAsync(checkInterval * (retries - 1));
-		expect(mocks.addMonitorStatus).toHaveBeenLastCalledWith(mocks.db, 1, "down", 0);
-	});
-
-	it("stores recovery for an invisible monitor without tracking incidents", async () => {
-		config.monitors[0].visible = false;
-		await exhaustRetries();
-		await report("degraded", 13);
-		await vi.advanceTimersByTimeAsync(checkInterval);
-		expect(mocks.addMonitorStatus).toHaveBeenCalledExactlyOnceWith(mocks.db, 1, "degraded", 13);
-		expect(mocks.createIncident).not.toHaveBeenCalled();
-		expect(mocks.resolveIncident).not.toHaveBeenCalled();
-	});
-
-	it("records reports normally before the retry threshold is reached", async () => {
-		await report("up", 9);
-		await vi.advanceTimersByTimeAsync(checkInterval);
-		expect(mocks.addMonitorStatus).toHaveBeenCalledExactlyOnceWith(mocks.db, 1, "up", 9);
-	});
+it("parses numeric reports without accepting non-finite or composite values", () => {
+	expect(parseReport("up", undefined)).toEqual({ status: "up", value: 0 });
+	expect(parseReport("degraded", "2.5")).toEqual({ status: "degraded", value: 2.5 });
+	for (const value of [NaN, Infinity, "NaN", "Infinity", [], {}, ""])
+		expect(parseReport("up", value)).toBeUndefined();
+	expect(parseReport("unknown", 1)).toBeUndefined();
 });

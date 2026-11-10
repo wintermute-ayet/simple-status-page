@@ -8,15 +8,16 @@ export default defineConfig(
 	{
 		files: ["src/**/*.ts", "tests/**/*.ts", "vitest.config.mts"],
 		extends: [js.configs.recommended, tseslint.configs.recommended],
-		languageOptions: { globals: globals.node }
-	},
-	{
-		files: ["src/**/*.ts"],
+		languageOptions: {
+			globals: globals.node,
+			parserOptions: {
+				project: ["./tsconfig.json", "./tsconfig.test.json"],
+				tsconfigRootDir: import.meta.dirname
+			}
+		},
 		rules: {
-			// Existing database rows and HTTP error bodies are not fully typed yet.
-			"@typescript-eslint/no-explicit-any": "off",
-			"@typescript-eslint/no-unused-vars": ["error", { caughtErrors: "none" }],
-			"@typescript-eslint/no-require-imports": ["error", { allow: ["^crypto$"] }]
+			"@typescript-eslint/no-floating-promises": "error",
+			"@typescript-eslint/no-misused-promises": "error"
 		}
 	}
 );

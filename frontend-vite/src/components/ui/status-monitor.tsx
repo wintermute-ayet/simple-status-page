@@ -21,8 +21,8 @@ export interface Monitor {
 
 type UptimeDay = {
 	date: string;
-	uptime: number;
-	degraded: number;
+	uptime: number | null;
+	degraded: number | null;
 	status: "up" | "degraded" | "down" | "unknown";
 };
 
@@ -71,8 +71,8 @@ const StatusMonitor: React.FC<StatusMonitorProps> = ({ data }) => {
 
 	const averageUptime =
 		validDays.length > 0
-			? validDays.reduce((total, day) => total + day.uptime, 0) / validDays.length
-			: 0;
+			? validDays.reduce((total, day) => total + (day.uptime ?? 0), 0) / validDays.length
+			: null;
 
 	const renderStatus = (status: string) => {
 		if (status === "up") {
@@ -113,7 +113,7 @@ const StatusMonitor: React.FC<StatusMonitorProps> = ({ data }) => {
 				<h2 className="font-bold truncate">{data.name}</h2>
 				{renderStatus(data.status)}
 				<span className="lg:w-40 text-end">
-					{averageUptime.toFixed(1)}%{" "}
+					{averageUptime === null ? "—" : `${averageUptime.toFixed(1)}%`}{" "}
 					<span className="hidden lg:inline">
 						{data.uptimeWording ? data.uptimeWording : "uptime"}
 					</span>
@@ -142,9 +142,12 @@ const StatusMonitor: React.FC<StatusMonitorProps> = ({ data }) => {
 									{day.status !== "unknown" && (
 										<>
 											<p>
-												{day.uptime.toFixed(2)}% {data.uptimeWording ? data.uptimeWording : "up"}
+												{(day.uptime ?? 0).toFixed(2)}%{" "}
+												{data.uptimeWording ? data.uptimeWording : "up"}
 											</p>
-											<p>{day.degraded > 0 ? day.degraded.toFixed(2) + "% degraded" : ""}</p>
+											<p>
+												{(day.degraded ?? 0) > 0 ? day.degraded!.toFixed(2) + "% degraded" : ""}
+											</p>
 											<p>
 												Summary:{" "}
 												{day.status == "down"

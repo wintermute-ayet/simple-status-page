@@ -24,6 +24,7 @@ interface OverviewResponse {
 		logo: string;
 		companyName: string;
 		refreshInterval: number;
+		subscriptionsEnabled: boolean;
 	};
 }
 
@@ -73,7 +74,8 @@ function StatusPage() {
 			favicon: "",
 			logo: '<svg width="900" height="140" xmlns="http://www.w3.org/2000/svg"></svg>',
 			companyName: "",
-			refreshInterval: 0
+			refreshInterval: 0,
+			subscriptionsEnabled: false
 		}
 	});
 
@@ -146,7 +148,7 @@ function StatusPage() {
 				</div>
 
 				<div className="flex max-w-md">
-					<SubscribeDialog />
+					{overviewData.public.subscriptionsEnabled && <SubscribeDialog />}
 				</div>
 			</div>
 			<h1 className="mt-1 mb-4 text-xl tracking-tight text-left lg:text-xl">Service Status</h1>

@@ -54,6 +54,34 @@ const migrations: Migration[] = [
 			);
 			db.exec(`CREATE INDEX IF NOT EXISTS idx_monitor_checks_created ON monitor_checks (created)`);
 		}
+	},
+	{
+		id: 3,
+		script: (db) => {
+			db.exec(`CREATE TABLE monitor_checks_next (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                monitor_id INTEGER NOT NULL,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP,
+                status TEXT CHECK(status IN ('up', 'degraded', 'down', 'unknown')) NOT NULL,
+                val INTEGER);
+            INSERT INTO monitor_checks_next SELECT id, monitor_id, created, status, val FROM monitor_checks;
+            DROP TABLE monitor_checks;
+            ALTER TABLE monitor_checks_next RENAME TO monitor_checks;
+            CREATE INDEX idx_monitor_checks_monitor_id ON monitor_checks (monitor_id);
+            CREATE INDEX idx_monitor_checks_created ON monitor_checks (created);
+            CREATE TABLE monitor_state (
+                monitor_id INTEGER PRIMARY KEY,
+                last_status TEXT,
+                last_value INTEGER NOT NULL DEFAULT 0,
+                last_report_at INTEGER NOT NULL DEFAULT 0,
+                retries INTEGER NOT NULL DEFAULT 0,
+                down_count INTEGER NOT NULL DEFAULT 0,
+                degraded_count INTEGER NOT NULL DEFAULT 0,
+                up_count INTEGER NOT NULL DEFAULT 0);
+            INSERT INTO monitor_state (monitor_id, last_status, last_value, last_report_at)
+            SELECT monitor_id, status, COALESCE(val, 0), COALESCE(STRFTIME('%s', created) * 1000, 0)
+            FROM monitor_checks WHERE id IN (SELECT MAX(id) FROM monitor_checks GROUP BY monitor_id);`);
+		}
 	}
 ];
 
@@ -80,17 +108,16 @@ function migrateDatabase(db: Database) {
 
 	// Get the list of applied migrations
 	const appliedMigrations = new Set(
-		db
-			.prepare(`SELECT id FROM migrations`)
-			.all()
-			.map((m: any) => m.id)
+		(db.prepare("SELECT id FROM migrations").all() as { id: number }[]).map((row) => row.id)
 	);
 
 	// Apply each migration if not already applied
 	migrations.forEach((migration) => {
 		if (!appliedMigrations.has(migration.id)) {
-			migration.script(db);
-			db.prepare(`INSERT INTO migrations (id) VALUES (?)`).run(migration.id);
+			db.transaction(() => {
+				migration.script(db);
+				db.prepare(`INSERT INTO migrations (id) VALUES (?)`).run(migration.id);
+			})();
 		}
 	});
 }

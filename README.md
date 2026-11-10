@@ -2,17 +2,20 @@
 
 ## Introduction
 
-**Simple Status Page** is a Koa.js and React Vite (with [shadcn-ui](https://github.com/shadcn-ui/ui)) based monitoring
-application for tracking the status of services through HTTP and API endpoints. It utilizes a SQLite database for
-storage and is configured via a YAML file, streamlining the setup process. This application is deployable using Docker.
+**Simple Status Page** is a Koa.js and React Vite (with
+[shadcn-ui](https://github.com/shadcn-ui/ui)) based monitoring application for tracking the status
+of services through HTTP and API endpoints. It utilizes a SQLite database for storage and is
+configured via a YAML file, streamlining the setup process. This application is deployable using
+Docker.
 
 ## Features
 
-- **Monitor Types:** 'http' for checking HTTP endpoints and 'api' for receiving external status updates.
+- **Monitor Types:** 'http' for checking HTTP endpoints and 'api' for receiving external status
+  updates.
 - **Docker Deployment:** Easy setup with Docker and Docker Compose.
 - **Customizable Configuration:** Managed through a single YAML file.
-- **Basic Database Migration:** A very simple database migration class that creates / updates the SQLite schema if
-  required.
+- **Basic Database Migration:** A very simple database migration class that creates / updates the
+  SQLite schema if required.
 - **Planned Features:**
   - Ping monitor type.
   - Additional notification providers/integrations.
@@ -27,42 +30,44 @@ storage and is configured via a YAML file, streamlining the setup process. This 
 
 ## Monitor Types and Functionality
 
-**Simple Status Page** currently supports two primary types of monitors: `http` and `api`. Each type has its unique way
-of monitoring and reporting the status of your services.
+**Simple Status Page** currently supports two primary types of monitors: `http` and `api`. Each type
+has its unique way of monitoring and reporting the status of your services.
 
 ### HTTP Monitor
 
-- **Functionality**: The `http` monitor type periodically makes HTTP requests to a specified endpoint and checks if the
-  response (optional) and status codes are as expected.
-- **Retries**: If a check fails (e.g., incorrect response or status code), the system will retry (after waiting for
-  `checkInterval`) the check based on the configured `retries` number before marking the service as down.
-- **Configuration**: Set the endpoint URL, expected response (using a regular expression), and valid status codes in the
-  configuration file.
+- **Functionality**: The `http` monitor type periodically makes HTTP requests to a specified
+  endpoint and checks if the response (optional) and status codes are as expected.
+- **Retries**: If a check fails (e.g., incorrect response or status code), the system will retry
+  (after waiting for `checkInterval`) the check based on the configured `retries` number before
+  marking the service as down.
+- **Configuration**: Set the endpoint URL, expected response (using a regular expression), and valid
+  status codes in the configuration file.
 
 ### API Monitor
 
-- **Functionality**: Unlike the `http` monitor, the `api` monitor type is designed to be called externally. It allows
-  external systems to report the status of a service.
-- **Retries**: For `api` monitors, the retry count increments if the time since the last call exceeds the
-  `checkInterval`. If it surpasses the configured `retries` count without a status update, the service is considered
-  down.
+- **Functionality**: Unlike the `http` monitor, the `api` monitor type is designed to be called
+  externally. It allows external systems to report the status of a service.
+- **Retries**: For `api` monitors, the retry count increments if the time since the last call
+  exceeds the `checkInterval`. If it surpasses the configured `retries` count without a status
+  update, the service is considered down.
 - **Endpoint Call**: To update the status of an `api` monitor, make an HTTP request to
   `http://[basedomain]/api/monitor/[uuid]?status=[status]&value=[value]`.
   - `uuid`: Unique identifier for the monitor, keep this private.
   - `status`: The status of the monitor (`up`, `down`, or `degraded`).
-  - `value`: Optional numeric value providing additional data (currently not used but stored in the database).
+  - `value`: Optional numeric value providing additional data (currently not used but stored in the
+    database).
 
 ### Monitor Status and Incidents
 
-- Both monitor types support optional incident tracking. Incidents can be automatically created and resolved based on
-  the monitor's status over time, as defined in the `incidents` configuration.
+- Both monitor types support optional incident tracking. Incidents can be automatically created and
+  resolved based on the monitor's status over time, as defined in the `incidents` configuration.
 - `createAfter`: Number of consecutive failure checks required before creating an incident.
 - `resolveAfter`: Number of consecutive successful checks required before resolving an incident.
 
 ## Configuration Guide
 
-The application is configured through the `data/config.yaml` file. Below is a detailed explanation of the configuration
-parameters:
+The application is configured through the `data/config.yaml` file. Below is a detailed explanation
+of the configuration parameters:
 
 - **public**:
 
@@ -152,11 +157,13 @@ npm run start
    ```sh
    docker-compose up
    ```
-   _The container will mount `data/` locally to read the `config.yaml` and create / store the database._
+   _The container will mount `data/` locally to read the `config.yaml` and create / store the
+   database._
 
 ## Optional: Setting Up Nginx Reverse Proxy with HTTPS (Debian/Ubuntu)
 
-**Note:** _This is a very basic example of how to configure nginx with letsencrypt as reverse proxy._
+**Note:** _This is a very basic example of how to configure nginx with letsencrypt as reverse
+proxy._
 
 ### Step 1: Install Nginx and Certbot
 
@@ -227,13 +234,13 @@ Create a new Nginx server block configuration:
 
    Replace `example.com` and `www.example.com` with your domain name.
 
-2. Follow the prompts to configure your certificate. Certbot will automatically modify your Nginx configuration to serve
-   your site over HTTPS.
+2. Follow the prompts to configure your certificate. Certbot will automatically modify your Nginx
+   configuration to serve your site over HTTPS.
 
 ### Step 4: Automatic Certificate Renewal
 
-Certbot sets up a cron job or systemd timer for renewing certificates that are near expiration. You can test the
-automatic renewal process with:
+Certbot sets up a cron job or systemd timer for renewing certificates that are near expiration. You
+can test the automatic renewal process with:
 
 ```sh
 sudo certbot renew --dry-run
@@ -241,10 +248,44 @@ sudo certbot renew --dry-run
 
 ---
 
-With these steps, your Nginx server will now act as a reverse proxy to your Docker container and serve your application
-securely using HTTPS. Remember to replace `example.com` with your actual domain and adjust the port number (`3000`) if
-your application is running on a different port.
+With these steps, your Nginx server will now act as a reverse proxy to your Docker container and
+serve your application securely using HTTPS. Remember to replace `example.com` with your actual
+domain and adjust the port number (`3000`) if your application is running on a different port.
 
 ## License
 
 This project is released under the MIT License.
+
+## Monitor correctness and configuration
+
+Startup validates the YAML before opening the database. `CONFIG_PATH` overrides the default lookup
+of `data/config.yaml`, then `data/config.yml`. Unknown keys, duplicate monitor ids or API tokens,
+tokens shorter than 16 characters, invalid regular expressions and missing group members are
+configuration errors. `timeoutDegradationMs` remains a deprecated alias for `timeoutDegradedMs` with
+a startup warning; the canonical key takes precedence when both are present.
+
+SMTP is optional. Without its block, subscriptions are disabled and the subscribe button is hidden.
+Port 465 uses implicit TLS; port 587 uses STARTTLS. Delivery is queued (at most 100 queued
+messages), time limited to 10 seconds per attempt and retried at most twice. A delivery failure
+returns a controlled error and does not terminate the service. Pending subscriptions can request
+confirmation again. Shutdown drains or cancels outstanding work before closing SQLite.
+
+`resolveAfter` counts consecutive checks that are **up or degraded**. A down or unknown check resets
+that recovery streak. A failure that still meets `createAfter` for its incident type takes
+precedence and keeps that incident active. Degraded service can therefore resolve an outage while
+retaining a performance incident. Incident counters, retry counters and the last pushed report
+survive restarts; each recorded check and its runtime state are committed together. Migration 3 adds
+`monitor_state` and extends the raw check table to accept `unknown`, preserving existing checks and
+indexes.
+
+HTTP monitors run their first check within 100 ms of startup with a deterministic offset per id.
+Checks never overlap, time out individually, follow at most five redirects and accept at most 1 MB
+of text, JSON, XML or JavaScript as text. Binary bodies are rejected. The regular expression is
+compiled once at startup. API monitors keep the existing GET callback and default to
+`onMissing: down`; `onMissing: unknown` records no data instead. Missing `value` defaults to zero;
+supplied values must be finite numbers.
+
+`dailyThresholds.down` and `dailyThresholds.degraded` are fractions of known checks used for each
+calendar day's summary (defaults `0.001` and `0.005`). Unknown checks and days without data are
+excluded from uptime. No-data days have null uptime, and an entirely empty history displays an em
+dash instead of zero percent.

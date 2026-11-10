@@ -1,249 +1,211 @@
-import DatabaseConstructor, { Database, RunResult } from "better-sqlite3";
+import DatabaseConstructor, { type Database, type Statement } from "better-sqlite3";
+import type { DailyThresholds, IncidentType, MonitorStatus } from "./config";
+
+function typedStatement<Parameters extends unknown[], Row>(db: Database, sql: string) {
+	return db.prepare<Parameters>(sql) as Omit<Statement<Parameters>, "all" | "get"> & {
+		all(...parameters: Parameters): Row[];
+		get(...parameters: Parameters): Row | undefined;
+	};
+}
 
 export function initializeDatabase(dbPath: string): Database {
-	const db = new DatabaseConstructor(dbPath);
-	return db;
+	return new DatabaseConstructor(dbPath);
 }
-
-interface MonitorRow {
-	id: number;
-	name: string;
-	description: string;
-}
-
-interface SubscriberRow {
-	id: number;
-	email: string;
-	active: number;
-	created: Date;
-}
-
-export interface IncidentRow {
-	id: number;
+export interface MonitorState {
 	monitor_id: number;
-	monitor_name: string | undefined; // not in db
-	type: string;
-	message: string;
-	status: string;
-	created: Date;
-	modified: Date;
+	last_status: MonitorStatus | null;
+	last_value: number;
+	last_report_at: number;
+	retries: number;
+	down_count: number;
+	degraded_count: number;
+	up_count: number;
 }
-
-export function getMonitors(db: Database): MonitorRow[] {
-	try {
-		const rows: MonitorRow[] = db
-			.prepare(`SELECT * FROM monitors WHERE enabled=1`)
-			.all() as MonitorRow[];
-		const formattedData = rows.map((row) => ({
-			id: row.id,
-			name: row.name,
-			description: row.description
-		}));
-		return formattedData;
-	} catch (err) {
-		console.error(err);
-		return [];
-	}
+export function initialMonitorState(monitorId: number): MonitorState {
+	return {
+		monitor_id: monitorId,
+		last_status: null,
+		last_value: 0,
+		last_report_at: 0,
+		retries: 0,
+		down_count: 0,
+		degraded_count: 0,
+		up_count: 0
+	};
 }
-
-export function getMonitorsLatestStatus(db: Database): any[] {
-	try {
-		const created = new Date();
-		created.setHours(created.getHours() - 2);
-
-		const query = `
-      SELECT mc.monitor_id, mc.status
-      FROM monitor_checks mc
-      INNER JOIN (
-        SELECT monitor_id, MAX(created) as MaxCreated
-        FROM monitor_checks
-        WHERE created >= ?
-        GROUP BY monitor_id
-      ) as latest ON mc.monitor_id = latest.monitor_id AND mc.created = latest.MaxCreated
-      ORDER BY mc.monitor_id;  
-    `;
-		const rows: any[] = db.prepare(query).all(
-			created
-				.toISOString()
-				.replace("T", " ")
-				.replace(/\.\d+Z$/, "")
-		);
-		const typedRows = rows as Array<{ monitor_id: number; status: string }>;
-		const statuses = typedRows.reduce((obj: any, item: any) => {
-			obj[item.monitor_id] = item.status;
-			return obj;
-		}, {});
-		return statuses;
-	} catch (err) {
-		console.error(err);
-		return [];
-	}
+export function loadMonitorStates(db: Database): Map<number, MonitorState> {
+	const rows = typedStatement<[], MonitorState>(db, "SELECT * FROM monitor_state").all();
+	return new Map(rows.map((row) => [row.monitor_id, row]));
 }
-
-export function getMonitorStatus(db: Database, id: number): any[] {
-	const days = 90;
-	const today = new Date();
-	const pastDate = new Date(today);
-	pastDate.setDate(pastDate.getDate() - days);
-
-	const query = `
-    SELECT 
-      DATE(created) as date,
-      ROUND(AVG(status = 'up' OR status='degraded') * 100, 2) as uptime,
-      ROUND(AVG(status='degraded') * 100, 2) as degraded,
-      CASE
-        WHEN SUM(status = 'down') > SUM(status = 'up')*0.001 THEN 'down'
-        WHEN SUM(status = 'degraded') > SUM(status = 'up')*0.005 THEN 'degraded'
-        ELSE 'up'
-      END as status
-    FROM monitor_checks 
-    WHERE monitor_id = ? AND DATE(created) >= DATE(?)
-    GROUP BY DATE(created)
-    ORDER BY DATE(created) ASC
-  `;
-
-	const rows: any[] = db.prepare(query).all(
-		id,
-		pastDate
-			.toISOString()
-			.replace("T", " ")
-			.replace(/\.\d+Z$/, "")
-	);
-	const formattedData = [];
-	for (let i = 0; i <= days; i++) {
-		const date = new Date(pastDate);
-		date.setDate(date.getDate() + i);
-		const dateString = date.toISOString().split("T")[0];
-
-		const rowForDate = rows.find((row: any) => row.date === dateString);
-		if (rowForDate) {
-			formattedData.push(rowForDate);
-		} else {
-			formattedData.push({
-				date: dateString,
-				uptime: 0,
-				degraded: 0,
-				status: "unknown"
-			});
-		}
-	}
-	return formattedData;
+export function saveMonitorState(db: Database, state: MonitorState): void {
+	db.prepare(
+		`INSERT INTO monitor_state
+		(monitor_id, last_status, last_value, last_report_at, retries, down_count, degraded_count, up_count)
+		VALUES (@monitor_id, @last_status, @last_value, @last_report_at, @retries, @down_count, @degraded_count, @up_count)
+		ON CONFLICT(monitor_id) DO UPDATE SET last_status=excluded.last_status,
+		last_value=excluded.last_value, last_report_at=excluded.last_report_at, retries=excluded.retries,
+		down_count=excluded.down_count, degraded_count=excluded.degraded_count, up_count=excluded.up_count`
+	).run(state);
 }
-
-export function addMonitorStatus(db: Database, id: number, status: string, value: number): void {
-	try {
+export function addMonitorStatus(
+	db: Database,
+	id: number,
+	status: MonitorStatus,
+	value: number,
+	state?: MonitorState
+): void {
+	const write = () => {
 		db.prepare("INSERT INTO monitor_checks (monitor_id, status, val) VALUES (?, ?, ?)").run(
 			id,
 			status,
 			value
 		);
-	} catch (err) {
-		console.error(err);
-	}
+		if (state) saveMonitorState(db, state);
+	};
+	if (state) db.transaction(write)();
+	else write();
 }
-
+export interface SubscriberRow {
+	id: number;
+	email: string;
+	active: number;
+	created: string;
+}
+export interface IncidentRow {
+	id: number;
+	monitor_id: number;
+	monitor_name?: string;
+	type: IncidentType;
+	message: string;
+	status: "active" | "resolved";
+	created: string;
+	modified: string;
+}
+export interface HistoryDay {
+	date: string;
+	uptime: number | null;
+	degraded: number | null;
+	status: MonitorStatus;
+}
+export function getMonitors(db: Database): { id: number; name: string; description: string }[] {
+	return typedStatement<[], { id: number; name: string; description: string }>(
+		db,
+		"SELECT id, name, description FROM monitors WHERE enabled=1"
+	).all();
+}
+export function getMonitorsLatestStatus(db: Database): Record<number, MonitorStatus> {
+	const rows = typedStatement<[], { monitor_id: number; status: MonitorStatus }>(
+		db,
+		`
+		SELECT monitor_id, status FROM monitor_checks
+		WHERE id IN (SELECT MAX(id) FROM monitor_checks GROUP BY monitor_id)`
+	).all();
+	return Object.fromEntries(rows.map((row) => [row.monitor_id, row.status]));
+}
+export function getMonitorStatus(
+	db: Database,
+	id: number,
+	thresholds: DailyThresholds = { down: 0.001, degraded: 0.005 }
+): HistoryDay[] {
+	const past = new Date();
+	past.setUTCDate(past.getUTCDate() - 90);
+	const rows = typedStatement<[number, number, number, string], HistoryDay>(
+		db,
+		`
+		SELECT DATE(created) AS date,
+		ROUND(AVG(status IN ('up', 'degraded')) * 100, 2) AS uptime,
+		ROUND(AVG(status = 'degraded') * 100, 2) AS degraded,
+		CASE WHEN AVG(status = 'down') > ? THEN 'down'
+		WHEN AVG(status = 'degraded') > ? THEN 'degraded' ELSE 'up' END AS status
+		FROM monitor_checks WHERE monitor_id = ? AND DATE(created) >= DATE(?) AND status != 'unknown'
+		GROUP BY DATE(created) ORDER BY DATE(created)`
+	).all(thresholds.down, thresholds.degraded, id, past.toISOString().slice(0, 10));
+	const byDate = new Map(rows.map((row) => [row.date, row]));
+	return Array.from({ length: 91 }, (_, index) => {
+		const day = new Date(past);
+		day.setUTCDate(day.getUTCDate() + index);
+		const date = day.toISOString().slice(0, 10);
+		return byDate.get(date) ?? { date, uptime: null, degraded: null, status: "unknown" };
+	});
+}
 export function addSubscriber(db: Database, email: string): boolean {
-	const result: SubscriberRow = db
-		.prepare(`SELECT * FROM subscribers WHERE email = ?`)
-		.get(email) as SubscriberRow;
-	if (result !== undefined && result.active == 1) {
-		return false;
+	const existing = getSubscriber(db, email);
+	if (existing?.active === 1) return false;
+	if (existing) {
+		db.prepare("UPDATE subscribers SET created=CURRENT_TIMESTAMP WHERE id=?").run(existing.id);
+		return true;
 	}
-	if (result !== undefined) {
-		db.prepare(`UPDATE subscribers SET created = CURRENT_TIMESTAMP WHERE id = ?`).run(result.id);
-		return false;
-	}
-
 	db.prepare("INSERT INTO subscribers (email) VALUES (?)").run(email);
 	return true;
 }
-
 export function getSubscriber(db: Database, email: string): SubscriberRow | undefined {
-	const result: SubscriberRow = db
-		.prepare(`SELECT * FROM subscribers WHERE email = ?`)
-		.get(email) as SubscriberRow;
-	return result;
+	return typedStatement<[string], SubscriberRow>(db, "SELECT * FROM subscribers WHERE email=?").get(
+		email
+	);
 }
-
 export function getSubscribers(db: Database): SubscriberRow[] {
-	const rows: SubscriberRow[] = db.prepare(`SELECT * FROM subscribers`).all() as SubscriberRow[];
-	return rows;
+	return typedStatement<[], SubscriberRow>(db, "SELECT * FROM subscribers").all();
 }
-
 export function getActiveSubscribers(db: Database): SubscriberRow[] {
-	const rows: SubscriberRow[] = db
-		.prepare(`SELECT * FROM subscribers WHERE active = ?`)
-		.all(1) as SubscriberRow[];
-	return rows;
+	return typedStatement<[], SubscriberRow>(db, "SELECT * FROM subscribers WHERE active=1").all();
 }
-
 export function activateSubscriber(db: Database, email: string): void {
-	db.prepare(`UPDATE subscribers SET active = 1 WHERE email = ?`).run(email);
+	db.prepare("UPDATE subscribers SET active=1 WHERE email=?").run(email);
 }
-
 export function deleteSubscriber(db: Database, email: string): void {
-	db.prepare(`DELETE FROM subscribers WHERE email = ?`).run(email);
+	db.prepare("DELETE FROM subscribers WHERE email=?").run(email);
 }
-
 export function createIncident(
 	db: Database,
 	monitorId: number,
-	type: string,
+	type: IncidentType,
 	message: string
 ): IncidentRow | undefined {
-	const result: IncidentRow = db
-		.prepare(`SELECT * FROM incidents WHERE monitor_id = ? AND type = ? AND status = ?`)
-		.get(monitorId, type, "active") as IncidentRow;
-	if (result !== undefined) {
-		return undefined;
-	}
-	const insertResult: RunResult = db
-		.prepare(`INSERT INTO incidents (monitor_id, type, message, status) VALUES (?, ?, ?, ?)`)
-		.run(monitorId, type, message, "active");
-	return db
-		.prepare(`SELECT * FROM incidents WHERE id = ?`)
-		.get(insertResult.lastInsertRowid) as IncidentRow;
+	const existing = typedStatement<[number, string], IncidentRow>(
+		db,
+		"SELECT * FROM incidents WHERE monitor_id=? AND type=? AND status='active'"
+	).get(monitorId, type);
+	if (existing) return undefined;
+	const result = db
+		.prepare("INSERT INTO incidents (monitor_id, type, message, status) VALUES (?, ?, ?, 'active')")
+		.run(monitorId, type, message);
+	return typedStatement<[number | bigint], IncidentRow>(
+		db,
+		"SELECT * FROM incidents WHERE id=?"
+	).get(result.lastInsertRowid);
 }
-
 export function resolveIncident(
 	db: Database,
 	monitorId: number,
-	type: string
+	type: IncidentType
 ): IncidentRow[] | undefined {
-	const rows: IncidentRow[] = db
-		.prepare(`SELECT * FROM incidents WHERE monitor_id = ? AND type = ? AND status = ?`)
-		.all(monitorId, type, "active") as IncidentRow[];
-	if (rows.length === 0) {
-		return undefined;
-	}
+	const rows = typedStatement<[number, string], IncidentRow>(
+		db,
+		"SELECT * FROM incidents WHERE monitor_id=? AND type=? AND status='active'"
+	).all(monitorId, type);
+	if (rows.length === 0) return undefined;
 	db.prepare(
-		`UPDATE incidents SET status = ?, modified = CURRENT_TIMESTAMP WHERE monitor_id = ? AND type = ? AND status = ?`
-	).run("resolved", monitorId, type, "active");
-
-	const updatedRows: IncidentRow[] = db
-		.prepare(`SELECT * FROM incidents WHERE id IN (${rows.map(() => "?").join(", ")})`)
-		.all(...rows.map((row) => row.id)) as IncidentRow[];
-	return updatedRows;
+		"UPDATE incidents SET status='resolved', modified=CURRENT_TIMESTAMP WHERE monitor_id=? AND type=? AND status='active'"
+	).run(monitorId, type);
+	return rows.map(
+		(row) =>
+			typedStatement<[number], IncidentRow>(db, "SELECT * FROM incidents WHERE id=?").get(row.id)!
+	);
 }
-
 export function getIncidents(db: Database, days: number): IncidentRow[] {
-	const startDate = new Date();
-	startDate.setDate(startDate.getDate() - days);
-	const rows: IncidentRow[] = db
-		.prepare(`SELECT * FROM incidents WHERE (status = ? OR created >= ?) ORDER BY id DESC`)
-		.all(
-			"active",
-			startDate
-				.toISOString()
-				.replace("T", " ")
-				.replace(/\.\d+Z$/, "")
-		) as IncidentRow[];
-	return rows;
+	const start = new Date();
+	start.setUTCDate(start.getUTCDate() - days);
+	return typedStatement<[string], IncidentRow>(
+		db,
+		"SELECT * FROM incidents WHERE status='active' OR created>=? ORDER BY id DESC"
+	).all(
+		start
+			.toISOString()
+			.replace("T", " ")
+			.replace(/\.\d+Z$/, "")
+	);
 }
-
 export function cleanupTables(db: Database): void {
-	db.prepare(
-		`DELETE FROM subscribers WHERE active = 0 AND created < DATETIME('now', '-14 day')`
-	).run();
-	db.prepare(`DELETE FROM monitor_checks WHERE created < DATETIME('now', '-91 day')`).run();
+	db.prepare("DELETE FROM subscribers WHERE active=0 AND created<DATETIME('now', '-14 day')").run();
+	db.prepare("DELETE FROM monitor_checks WHERE created<DATETIME('now', '-91 day')").run();
 }
