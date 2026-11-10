@@ -246,7 +246,10 @@ describe("HTTP monitors", () => {
 			maxContentLength: 1048576,
 			maxBodyLength: 1048576,
 			maxRedirects: 5,
-			headers: { "User-Agent": "simple-status-page/1.0" }
+			headers: {
+				"User-Agent": "simple-status-page/1.0",
+				Accept: "*/*"
+			}
 		});
 	});
 	it("measures failed requests without shadowing elapsed time", async () => {

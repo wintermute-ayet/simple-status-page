@@ -154,7 +154,8 @@ export class MonitorRuntime {
 					maxRedirects: 5,
 					headers: {
 						"User-Agent": "simple-status-page/1.0",
-						Accept: "text/*, application/json, application/xml"
+						// A narrow Accept can make framework endpoints negotiate XML/error responses.
+						Accept: "*/*"
 					},
 					validateStatus: () => true
 				});
