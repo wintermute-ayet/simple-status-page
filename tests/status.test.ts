@@ -57,9 +57,10 @@ async function snapshot(url: string): Promise<StatusSnapshot> {
 	return (await (await fetch(url + "/api/status")).json()) as StatusSnapshot;
 }
 function injected(html: string): StatusSnapshot {
-	const json = /<script type="application\/json" id="status-snapshot">([\s\S]*?)<\/script>/.exec(
-		html
-	)![1];
+	const json =
+		/<script type="application\/json" id="status-snapshot" data-etag="[^"]*">([\s\S]*?)<\/script>/.exec(
+			html
+		)![1];
 	expect(json).not.toContain("<");
 	return JSON.parse(json) as StatusSnapshot;
 }
@@ -210,6 +211,12 @@ describe("startup HTML injection", () => {
 		expect(html).toContain('rel="icon"');
 		expect(html).toContain('<img src="data:image/svg+xml;base64,');
 		expect(injected(html).public).toMatchObject({ companyName: name, logo: svg, favicon: svg });
+		const status = await fetch(url + "/api/status");
+		const etag = status.headers.get("ETag")!;
+		expect(html).toContain(`data-etag="${etag.replace(/"/g, "&quot;")}"`);
+		expect((await fetch(url + "/api/status", { headers: { "If-None-Match": etag } })).status).toBe(
+			304
+		);
 		expect(await (await fetch(url + "/index.html")).text()).toBe(html);
 	});
 });

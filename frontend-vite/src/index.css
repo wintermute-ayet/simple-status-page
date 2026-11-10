@@ -1,50 +1,286 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer base {
+:root {
+	font-family:
+		system-ui,
+		-apple-system,
+		BlinkMacSystemFont,
+		"Segoe UI",
+		sans-serif;
+	color-scheme: light dark;
+	--background: #f7f8fa;
+	--surface: #fff;
+	--text: #182230;
+	--muted: #536174;
+	--border: #cbd2dc;
+	--link: #164ca4;
+	--up: #166534;
+	--up-bg: #dcfce7;
+	--degraded: #854d0e;
+	--degraded-bg: #fef3c7;
+	--down: #991b1b;
+	--down-bg: #fee2e2;
+	--unknown: #526071;
+	--unknown-bg: #e8ecf1;
+	background: var(--background);
+	color: var(--text);
+}
+@media (prefers-color-scheme: dark) {
 	:root {
-		--background: 0 0% 100%;
-		--foreground: 222.2 84% 4.9%;
-		--card: 0 0% 100%;
-		--card-foreground: 222.2 84% 4.9%;
-		--popover: 0 0% 100%;
-		--popover-foreground: 222.2 84% 4.9%;
-		--primary: 222.2 47.4% 11.2%;
-		--primary-foreground: 210 40% 98%;
-		--secondary: 210 40% 96.1%;
-		--secondary-foreground: 222.2 47.4% 11.2%;
-		--muted: 210 40% 96.1%;
-		--muted-foreground: 215.4 16.3% 46.9%;
-		--accent: 210 40% 96.1%;
-		--accent-foreground: 222.2 47.4% 11.2%;
-		--destructive: 0 84.2% 60.2%;
-		--destructive-foreground: 210 40% 98%;
-		--border: 214.3 31.8% 91.4%;
-		--input: 214.3 31.8% 91.4%;
-		--ring: 222.2 84% 4.9%;
-		--radius: 0.3rem;
+		--background: #111820;
+		--surface: #1c2531;
+		--text: #eef2f8;
+		--muted: #b4bfd0;
+		--border: #475467;
+		--link: #a5c7ff;
+		--up: #a7f3c1;
+		--up-bg: #123d2a;
+		--degraded: #fde68a;
+		--degraded-bg: #493512;
+		--down: #fecaca;
+		--down-bg: #511f28;
+		--unknown: #d3dce8;
+		--unknown-bg: #344152;
 	}
-
-	.dark {
-		--background: 222.2 84% 4.9%;
-		--foreground: 210 40% 98%;
-		--card: 222.2 84% 4.9%;
-		--card-foreground: 210 40% 98%;
-		--popover: 222.2 84% 4.9%;
-		--popover-foreground: 210 40% 98%;
-		--primary: 210 40% 98%;
-		--primary-foreground: 222.2 47.4% 11.2%;
-		--secondary: 217.2 32.6% 17.5%;
-		--secondary-foreground: 210 40% 98%;
-		--muted: 217.2 32.6% 17.5%;
-		--muted-foreground: 215 20.2% 65.1%;
-		--accent: 217.2 32.6% 17.5%;
-		--accent-foreground: 210 40% 98%;
-		--destructive: 0 62.8% 30.6%;
-		--destructive-foreground: 210 40% 98%;
-		--border: 217.2 32.6% 17.5%;
-		--input: 217.2 32.6% 17.5%;
-		--ring: 212.7 26.8% 83.9;
+}
+* {
+	box-sizing: border-box;
+}
+body {
+	margin: 0;
+}
+button,
+input {
+	font: inherit;
+}
+button,
+input,
+dialog {
+	color: var(--text);
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 0.4rem;
+}
+button {
+	padding: 0.55rem 0.9rem;
+	cursor: pointer;
+}
+button:disabled {
+	cursor: wait;
+	opacity: 0.65;
+}
+button:hover:not(:disabled) {
+	border-color: var(--link);
+}
+:focus-visible {
+	outline: 3px solid var(--link);
+	outline-offset: 3px;
+}
+a {
+	color: var(--link);
+	text-underline-offset: 0.2em;
+}
+h1,
+h2,
+h3,
+p {
+	margin: 0;
+}
+h1 {
+	font-size: 1.4rem;
+	margin-top: 0.6rem;
+}
+h2 {
+	font-size: 1.2rem;
+	margin: 2rem 0 0.9rem;
+}
+h3 {
+	font-size: 1rem;
+}
+p {
+	line-height: 1.6;
+}
+.status-page {
+	max-width: 68rem;
+	margin: 2rem auto;
+	padding: 0 1rem;
+}
+.page-header,
+.monitor-header,
+.incident-header,
+.dialog-header {
+	display: flex;
+	align-items: center;
+	gap: 0.8rem;
+	justify-content: space-between;
+	flex-wrap: wrap;
+}
+.page-header {
+	margin-bottom: 1.5rem;
+}
+.company-logo {
+	display: block;
+	max-width: min(22rem, 65vw);
+	max-height: 4rem;
+}
+.summary {
+	padding: 1.1rem;
+	font-size: 1.1rem;
+	font-weight: 600;
+	border-radius: 0.5rem;
+}
+.status-up {
+	color: var(--up);
+	background: var(--up-bg);
+}
+.status-degraded {
+	color: var(--degraded);
+	background: var(--degraded-bg);
+}
+.status-down {
+	color: var(--down);
+	background: var(--down-bg);
+}
+.status-unknown {
+	color: var(--unknown);
+	background: var(--unknown-bg);
+}
+.last-updated,
+.muted,
+.monitor-description,
+.history-range,
+.day-details,
+footer {
+	color: var(--muted);
+	font-size: 0.85rem;
+}
+.last-updated {
+	margin: 0.7rem 0 1.2rem;
+}
+.section-links {
+	display: flex;
+	gap: 1.5rem;
+	padding-bottom: 1rem;
+	border-bottom: 1px solid var(--border);
+}
+.card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	padding: 1rem;
+	margin-bottom: 0.8rem;
+}
+.monitor-header h3 {
+	margin-right: auto;
+}
+.current-status {
+	padding: 0.2rem 0.45rem;
+	border-radius: 0.3rem;
+	font-size: 0.85rem;
+	font-weight: 600;
+}
+.uptime {
+	font-size: 0.9rem;
+	white-space: nowrap;
+}
+.monitor-description {
+	margin: 0.4rem 0 0.8rem;
+}
+.history {
+	display: grid;
+	grid-auto-flow: column;
+	grid-auto-columns: minmax(0, 1fr);
+	gap: 2px;
+	margin-top: 0.8rem;
+}
+.history-day {
+	min-width: 0;
+	height: 2.5rem;
+	border: 0;
+	border-radius: 2px;
+	padding: 0;
+	font-size: clamp(0.35rem, 1vw, 0.7rem);
+	font-weight: 700;
+}
+.history-day:focus-visible {
+	position: relative;
+	z-index: 1;
+}
+.history-day:hover {
+	outline: 2px solid var(--link);
+}
+.history-range {
+	display: flex;
+	justify-content: space-between;
+	margin: 0.4rem 0;
+}
+.day-details {
+	min-height: 1.6em;
+	overflow-wrap: anywhere;
+}
+.incident-header {
+	margin-bottom: 0.5rem;
+}
+.incident-down {
+	border-inline-start: 4px solid var(--down);
+}
+.incident-degraded {
+	border-inline-start: 4px solid var(--degraded);
+}
+.whitespace-pre-line {
+	white-space: pre-line;
+	overflow-wrap: anywhere;
+	margin-top: 0.5rem;
+	line-height: 1.6;
+}
+.notice {
+	padding: 1rem;
+	border: 1px solid var(--border);
+	border-radius: 0.4rem;
+	margin: 1rem 0;
+}
+.api-unreachable {
+	color: var(--down);
+	background: var(--down-bg);
+	border-color: var(--down);
+}
+dialog {
+	max-width: 28rem;
+	width: calc(100% - 2rem);
+	padding: 1.5rem;
+}
+dialog::backdrop {
+	background: rgb(0 0 0 / 60%);
+}
+.dialog-header {
+	margin-bottom: 0.7rem;
+}
+.dialog-header h2 {
+	margin: 0;
+}
+dialog form {
+	display: grid;
+	gap: 0.8rem;
+	margin-top: 1rem;
+}
+dialog input {
+	width: 100%;
+	padding: 0.65rem;
+}
+dialog [role="alert"] {
+	color: var(--down);
+}
+footer {
+	text-align: center;
+	padding: 2rem 0 0.5rem;
+}
+@media (max-width: 40rem) {
+	.status-page {
+		margin-top: 1rem;
+	}
+	.monitor-header h3,
+	.incident-header h3 {
+		flex-basis: 100%;
+	}
+	.history {
+		gap: 1px;
 	}
 }

@@ -42,7 +42,12 @@ function escapeHtml(value: string): string {
 function svgUrl(svg: string): string {
 	return "data:image/svg+xml;base64," + Buffer.from(svg, "utf8").toString("base64");
 }
-export function renderIndex(template: string, snapshot: StatusSnapshot, json: string): string {
+export function renderIndex(
+	template: string,
+	snapshot: StatusSnapshot,
+	json: string,
+	etag: string
+): string {
 	const title = escapeHtml(`${snapshot.public.companyName} Service Status`);
 	const favicon = snapshot.public.favicon
 		? `<link rel="icon" type="image/svg+xml" href="${svgUrl(snapshot.public.favicon)}">`
@@ -51,7 +56,7 @@ export function renderIndex(template: string, snapshot: StatusSnapshot, json: st
 		? `<img src="${svgUrl(snapshot.public.logo)}" alt="${escapeHtml(snapshot.public.companyName)} logo">`
 		: "";
 	// A data block is not executable JavaScript. Escaping '<' prevents </script> breakouts.
-	const data = `<script type="application/json" id="status-snapshot">${json.replace(/</g, "\\u003c")}</script>`;
+	const data = `<script type="application/json" id="status-snapshot" data-etag="${escapeHtml(etag)}">${json.replace(/</g, "\\u003c")}</script>`;
 	return template
 		.replace(/<title>[\s\S]*?<\/title>/i, () => `<title>${title}</title>`)
 		.replace(/<\/head>/i, () => favicon + data + "</head>")
@@ -116,6 +121,7 @@ export class StatusCache {
 			updatedAt: now.getTime()
 		};
 		const json = JSON.stringify(snapshot);
+		const etag = `W/"${createHash("sha256").update(json).digest("hex")}"`;
 		const identity = Buffer.from(json);
 		const bodies = {
 			identity,
@@ -123,11 +129,11 @@ export class StatusCache {
 			br: brotliCompressSync(identity, { params: { [constants.BROTLI_PARAM_QUALITY]: 4 } })
 		};
 		const html =
-			this.template === undefined ? undefined : renderIndex(this.template, snapshot, json);
+			this.template === undefined ? undefined : renderIndex(this.template, snapshot, json, etag);
 		// Publish a complete version together; requests never serialize/query/compress the snapshot.
 		this.snapshot = snapshot;
 		this.json = json;
-		this.etag = `W/"${createHash("sha256").update(identity).digest("hex")}"`;
+		this.etag = etag;
 		this.bodies = bodies;
 		this.html = html;
 	}

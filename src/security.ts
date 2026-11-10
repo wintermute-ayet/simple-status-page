@@ -114,14 +114,13 @@ export class SubscriptionRateLimiter {
 }
 
 export const securityHeaders: Middleware = async (ctx, next) => {
-	// Radix dialogs/tooltips inject scroll-lock styles through react-style-singleton.
-	// Scripts remain restricted to external same-origin files.
+	// The frontend uses external CSS and native controls; no inline styles are needed.
 	ctx.set(
 		"Content-Security-Policy",
 		[
 			"default-src 'self'",
 			"script-src 'self'",
-			"style-src 'self' 'unsafe-inline'",
+			"style-src 'self'",
 			"img-src 'self' data:",
 			"connect-src 'self'",
 			"object-src 'none'",

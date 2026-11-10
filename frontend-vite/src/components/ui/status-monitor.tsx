@@ -1,182 +1,73 @@
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
+import { averageUptime, dayDetails, statusIcons, statusLabels } from "@/lib/history";
+import type { Monitor } from "@/lib/status-snapshot";
 
-import React, { useEffect, useState } from "react";
-import {
-	CheckCircledIcon,
-	CrossCircledIcon,
-	ExclamationTriangleIcon,
-	QuestionMarkCircledIcon
-} from "@radix-ui/react-icons";
-
-const baseUrl = import.meta.env.VITE_API_BASE_URL;
-
-export interface Monitor {
-	id: number;
-	name: string;
-	status: "up" | "degraded" | "down" | "unknown";
-	ts: number;
-	description: string;
-	uptimeWording: string;
-	history?: UptimeDay[];
-}
-
-type UptimeDay = {
-	date: string;
-	uptime: number | null;
-	degraded: number | null;
-	status: "up" | "degraded" | "down" | "unknown";
-};
-
-type StatusMonitorProps = {
-	data: Monitor;
-};
-
-// cache to avoid re-fetching data when switching tabs or if the server wants to keep the existing details
-const statusDataCache: Record<string, UptimeDay[]> = {};
-
-const StatusMonitor: React.FC<StatusMonitorProps> = ({ data }) => {
-	const initialData: UptimeDay[] = Array.from({ length: 91 }, (_, i) => {
-		const date = new Date();
-		date.setDate(date.getDate() - (90 - i));
-		return {
-			date: date.toISOString().split("T")[0], // format as 'YYYY-MM-DD'
-			uptime: null,
-			degraded: null,
-			status: "unknown" as const
-		};
-	});
-
-	const [statusData, setStatusData] = useState<UptimeDay[]>(data.history ?? initialData);
-
-	useEffect(() => {
-		if (data.history) {
-			setStatusData(data.history);
-			return;
-		}
-		// set the key for our cache
-		const cacheKey = `${data.id}-${data.ts}`;
-
-		// check if we have cached data
-		if (statusDataCache[cacheKey]) {
-			setStatusData(statusDataCache[cacheKey]);
-			return;
-		}
-
-		// get detailed statistics for the past 90 days
-		fetch(`${baseUrl}/api/monitor?id=${data.id}`)
-			.then((response) => response.json())
-			.then((data) => {
-				statusDataCache[cacheKey] = data;
-				setStatusData(data);
-			})
-			.catch((error) => console.error("Error fetching monitor status:", error));
-	}, [data.id, data.ts, data.history]);
-
-	const validDays = statusData.filter((day) => day.status !== "unknown");
-
-	const averageUptime =
-		validDays.length > 0
-			? validDays.reduce((total, day) => total + (day.uptime ?? 0), 0) / validDays.length
-			: null;
-
-	const renderStatus = (status: string) => {
-		if (status === "up") {
-			return (
-				<span className="grow text-end text-green-500">
-					<CheckCircledIcon className="inline mr-1" />
-					<span className="hidden lg:inline">Operational</span>
-				</span>
-			);
-		}
-		if (status === "degraded") {
-			return (
-				<span className="grow text-end text-yellow-500">
-					<ExclamationTriangleIcon className="inline mr-1" />
-					<span className="hidden lg:inline">Degraded Performance</span>
-				</span>
-			);
-		}
-		if (status === "down") {
-			return (
-				<span className="grow text-end text-red-500">
-					<CrossCircledIcon className="inline mr-1" />
-					<span className="hidden lg:inline">Down</span>
-				</span>
-			);
-		}
-		return (
-			<span className="grow text-end text-gray-500">
-				<QuestionMarkCircledIcon className="inline mr-1" />
-				<span className="hidden lg:inline">Unknown</span>
-			</span>
-		);
-	};
-
+export default function StatusMonitor({ data }: { data: Monitor }) {
+	const detailsId = useId();
+	const latest = data.history[data.history.length - 1];
+	const [selectedDate, setSelectedDate] = useState(latest?.date);
+	const selected = data.history.find((day) => day.date === selectedDate) ?? latest;
+	const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+	const uptime = averageUptime(data.history);
+	function navigate(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+		const next =
+			event.key === "Home"
+				? 0
+				: event.key === "End"
+					? data.history.length - 1
+					: event.key === "ArrowLeft"
+						? Math.max(0, index - 1)
+						: event.key === "ArrowRight"
+							? Math.min(data.history.length - 1, index + 1)
+							: undefined;
+		if (next === undefined) return;
+		event.preventDefault();
+		buttons.current[next]?.focus();
+	}
 	return (
-		<>
-			<div className="flex justify-between items-center mb-0">
-				<h2 className="font-bold truncate">{data.name}</h2>
-				{renderStatus(data.status)}
-				<span className="lg:w-40 text-end">
-					{averageUptime === null ? "—" : `${averageUptime.toFixed(1)}%`}{" "}
-					<span className="hidden lg:inline">
-						{data.uptimeWording ? data.uptimeWording : "uptime"}
-					</span>
+		<article className="monitor card">
+			<div className="monitor-header">
+				<h3>{data.name}</h3>
+				<span className={`current-status status-${data.status}`}>
+					<span aria-hidden="true">{statusIcons[data.status]}</span> {statusLabels[data.status]}
+				</span>
+				<span className="uptime">
+					{uptime === null ? "No data" : `${uptime.toFixed(1)}%`} {data.uptimeWording || "uptime"}
 				</span>
 			</div>
-
-			{data.description && (
-				<div className="flex pt-0 pb-1">
-					<p className="text-xs text-gray-500">{data.description}</p>
-				</div>
-			)}
-
-			<div className="flex justify-between items-center mb-2 space-x-px lg:space-x-1">
-				{statusData.map((day, index) => (
-					<React.Fragment key={day.date}>
-						<TooltipProvider>
-							<Tooltip>
-								<TooltipTrigger className="flex-grow h-10">
-									<div
-										key={index}
-										className={`h-full ${day.status === "unknown" ? "bg-gray-100" : day.status === "up" ? "bg-green-500" : day.status === "degraded" ? "bg-yellow-500" : "bg-red-500"}`}
-									/>
-								</TooltipTrigger>
-								<TooltipContent>
-									<p className="font-bold">{day.date}</p>
-									{day.status !== "unknown" && (
-										<>
-											<p>
-												{(day.uptime ?? 0).toFixed(2)}%{" "}
-												{data.uptimeWording ? data.uptimeWording : "up"}
-											</p>
-											<p>
-												{(day.degraded ?? 0) > 0 ? day.degraded!.toFixed(2) + "% degraded" : ""}
-											</p>
-											<p>
-												Summary:{" "}
-												{day.status == "down"
-													? "Partial outage"
-													: day.status == "up"
-														? "No incidents"
-														: day.status == "degraded"
-															? "Impacted performance"
-															: ""}
-											</p>
-										</>
-									)}
-								</TooltipContent>
-							</Tooltip>
-						</TooltipProvider>
-					</React.Fragment>
+			{data.description && <p className="monitor-description">{data.description}</p>}
+			<div
+				className="history"
+				role="group"
+				aria-label={`Daily history for ${data.name}. Use arrow keys to choose a day.`}
+			>
+				{data.history.map((day, index) => (
+					<button
+						key={day.date}
+						ref={(element) => {
+							buttons.current[index] = element;
+						}}
+						type="button"
+						className={`history-day status-${day.status}`}
+						tabIndex={day.date === selected?.date ? 0 : -1}
+						aria-label={dayDetails(day)}
+						aria-describedby={detailsId}
+						title={dayDetails(day)}
+						onFocus={() => setSelectedDate(day.date)}
+						onClick={() => setSelectedDate(day.date)}
+						onKeyDown={(event) => navigate(event, index)}
+					>
+						<span aria-hidden="true">{statusIcons[day.status]}</span>
+					</button>
 				))}
 			</div>
-			<div className="flex justify-between text-sm text-gray-600 mt-2">
-				<span>90 days ago</span>
+			<div className="history-range">
+				<span>{data.history[0]?.date ?? "No data"}</span>
 				<span>Today</span>
 			</div>
-		</>
+			<p id={detailsId} className="day-details" aria-live="polite">
+				{selected ? dayDetails(selected) : "No data"}
+			</p>
+		</article>
 	);
-};
-
-export default StatusMonitor;
+}

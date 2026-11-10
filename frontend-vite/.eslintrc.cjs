@@ -14,9 +14,7 @@ module.exports = {
 		"react-refresh/only-export-components": [
 			"warn",
 			{
-				allowConstantExport: true,
-				// UI primitives share these helpers with their consumers.
-				allowExportNames: ["badgeVariants", "buttonVariants", "useFormField"]
+				allowConstantExport: true
 			}
 		]
 	}

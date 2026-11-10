@@ -1,206 +1,124 @@
-import { useEffect, useMemo, useState } from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-
-import StatusMonitor, { Monitor } from "../components/ui/status-monitor";
-import { SubscribeDialog } from "../components/subscribe-dialog";
-import { useLocation } from "react-router-dom";
-import { toast } from "@/components/ui/use-toast";
-import React from "react";
-import { StatusAlerts } from "@/components/ui/status-alerts";
-import { Badge } from "@/components/ui/badge";
-import IncidentList, { Incident } from "@/components/ui/incident-list";
+import { Fragment, lazy, Suspense, useEffect, useRef, useState } from "react";
+import StatusMonitor from "@/components/ui/status-monitor";
+import IncidentList from "@/components/ui/incident-list";
 import SvgFavicon from "@/components/svg-favicon";
-import { readSnapshot } from "@/lib/status-snapshot";
+import { useStatusSnapshot } from "@/lib/use-status-snapshot";
 
-const baseUrl = import.meta.env.VITE_API_BASE_URL;
+const SubscribeDialog = lazy(() => import("@/components/subscribe-dialog"));
+const results: Record<string, string> = {
+	"subscribe-success": "Successfully activated your subscription.",
+	"subscribe-error": "Unable to activate your subscription. Please try again.",
+	"unsubscribe-success": "Successfully unsubscribed from status updates.",
+	"unsubscribe-error": "Unable to unsubscribe. Please try again."
+};
 
-interface OverviewResponse {
-	groups: {
-		name: string;
-		monitors: number[];
-	}[];
-	monitors: Monitor[];
-	public: {
-		favicon: string;
-		logo: string;
-		companyName: string;
-		refreshInterval: number;
-		subscriptionsEnabled: boolean;
-	};
-}
-
-function StatusPage() {
-	const [initialSnapshot] = useState(readSnapshot);
-	const location = useLocation();
-	const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
-
-	useEffect(() => {
-		const resultParam = query.get("result");
-
-		if (resultParam) {
-			switch (resultParam) {
-				case "subscribe-success":
-					toast({
-						title: "Success!",
-						description: "Successfully activated subscription."
-					});
-					break;
-				case "subscribe-error":
-					toast({
-						variant: "destructive",
-						title: "Error!",
-						description: "Unable to activate subscription. Please try again."
-					});
-					break;
-				case "unsubscribe-success":
-					toast({
-						title: "Success!",
-						description: "Successfully unsubscribed from status updates."
-					});
-					break;
-				case "unsubscribe-error":
-					toast({
-						variant: "destructive",
-						title: "Error!",
-						description: "Unable to unsubscribe. Please try again."
-					});
-					break;
-			}
-		}
-	}, [query]);
-
-	const [overviewData, setOverviewData] = useState<OverviewResponse>(
-		initialSnapshot ?? {
-			groups: [],
-			monitors: [],
-			public: {
-				favicon: "",
-				logo: '<svg width="900" height="140" xmlns="http://www.w3.org/2000/svg"></svg>',
-				companyName: "",
-				refreshInterval: 0,
-				subscriptionsEnabled: false
-			}
-		}
+export default function StatusPage() {
+	const { snapshot, unreachable } = useStatusSnapshot();
+	const [subscribeOpen, setSubscribeOpen] = useState(false);
+	const subscribeButton = useRef<HTMLButtonElement>(null);
+	const [result] = useState(() =>
+		typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("result")
 	);
-
 	useEffect(() => {
-		let refreshTimerId: NodeJS.Timeout | null = null;
-
-		const fetchData = () => {
-			fetch(`${baseUrl}/api/overview`)
-				.then((response) => response.json())
-				.then((data) => {
-					setOverviewData(data);
-					// reset timeout if required
-					if (refreshTimerId) {
-						clearTimeout(refreshTimerId);
-					}
-					if (data.public.refreshInterval > 0) {
-						refreshTimerId = setTimeout(fetchData, data.public.refreshInterval * 1000);
-					}
-				})
-				.catch((error) => {
-					console.error("Error fetching overview data:", error);
-				});
-
-			fetch(`${baseUrl}/api/incidents`)
-				.then((response) => response.json())
-				.then((data) => {
-					setIncidentData(data);
-				})
-				.catch((error) => {
-					console.error("Error fetching incident data:", error);
-				});
-		};
-		if (!initialSnapshot) fetchData();
-		else if (initialSnapshot.public.refreshInterval > 0)
-			refreshTimerId = setTimeout(fetchData, initialSnapshot.public.refreshInterval * 1000);
-
-		// cleanup timer on unmount
-		return () => {
-			if (refreshTimerId) {
-				clearTimeout(refreshTimerId);
-			}
-		};
-	}, [initialSnapshot]);
-
-	const [incidentData, setIncidentData] = useState<Incident[]>(initialSnapshot?.incidents ?? []);
-
-	const numDegradedServices =
-		overviewData.monitors !== undefined
-			? overviewData.monitors.filter((monitor) => monitor.status === "degraded").length
-			: 0;
-	const numDownServices =
-		overviewData.monitors !== undefined
-			? overviewData.monitors.filter((monitor) => monitor.status === "down").length
-			: 0;
-	const numActiveIncidents =
-		incidentData !== undefined
-			? incidentData.filter((incident: Incident) => incident.status === "active").length
-			: 0;
+		if (snapshot) document.title = `${snapshot.public.companyName} Service Status`;
+	}, [snapshot]);
+	function closeSubscribe() {
+		setSubscribeOpen(false);
+		subscribeButton.current?.focus();
+	}
+	const down = snapshot?.monitors.filter((monitor) => monitor.status === "down").length ?? 0;
+	const degraded =
+		snapshot?.monitors.filter((monitor) => monitor.status === "degraded").length ?? 0;
+	const unknown = snapshot?.monitors.filter((monitor) => monitor.status === "unknown").length ?? 0;
+	const empty = !snapshot?.monitors.length;
+	const summaryStatus = down ? "down" : degraded ? "degraded" : unknown || empty ? "unknown" : "up";
+	const summary = down
+		? `${down} service${down === 1 ? " is" : "s are"} down`
+		: degraded
+			? `${degraded} service${degraded === 1 ? " has" : "s have"} degraded performance`
+			: unknown || empty
+				? "Waiting for service status"
+				: "All services operational";
+	const activeIncidents =
+		snapshot?.incidents.filter((incident) => incident.status === "active").length ?? 0;
 
 	return (
-		<>
-			<SvgFavicon svgMarkup={overviewData.public.favicon} />
-
-			<div className="flex justify-between items-center mb-2">
-				<div className="flex max-w-md pr-4">
-					<img
-						src={`data:image/svg+xml,${encodeURIComponent(overviewData.public.logo)}`}
-						alt="Logo"
-						className="block mx-auto"
-					/>{" "}
-					{}
+		<main className="status-page">
+			{snapshot && <SvgFavicon svgMarkup={snapshot.public.favicon} />}
+			<header className="page-header">
+				<div>
+					{snapshot?.public.logo && (
+						<img
+							className="company-logo"
+							src={`data:image/svg+xml,${encodeURIComponent(snapshot.public.logo)}`}
+							alt={`${snapshot.public.companyName} logo`}
+						/>
+					)}
+					<h1>{snapshot?.public.companyName} Service Status</h1>
 				</div>
-
-				<div className="flex max-w-md">
-					{overviewData.public.subscriptionsEnabled && <SubscribeDialog />}
-				</div>
-			</div>
-			<h1 className="mt-1 mb-4 text-xl tracking-tight text-left lg:text-xl">Service Status</h1>
-
-			<Tabs defaultValue="status" className="space-y-1">
-				<TabsList className="mb-6">
-					<TabsTrigger value="status">Status Overview</TabsTrigger>
-					<TabsTrigger value="incidents">
-						<span className="mr-1">Incident List</span>
-						<Badge variant={numActiveIncidents > 0 ? `destructive` : `outline`}>
-							{numActiveIncidents}
-						</Badge>
-					</TabsTrigger>
-				</TabsList>
-				<TabsContent value="status" className="space-y-4">
-					<div className="grid gap-4 grid-cols-1">
-						<StatusAlerts numDegraded={numDegradedServices} numDown={numDownServices} />
-						{overviewData.groups.map((group) => (
-							<React.Fragment key={group.name}>
-								<h1 className="mt-10 text-left scroll-m-20 border-b pb-2 text-2xl font-semibold tracking-tight transition-colors first:mt-0">
-									{group.name}
-								</h1>
-								{group.monitors.map((monitorId) => {
-									const monitor = overviewData.monitors.find((m) => m.id === monitorId);
-									if (!monitor) return null;
-									return (
-										<React.Fragment key={monitor.id}>
-											<div className="container border shadow rounded-md space-y-1 py-2">
-												<StatusMonitor data={monitor} />
-											</div>
-										</React.Fragment>
-									);
-								})}
-							</React.Fragment>
-						))}
+				{snapshot?.public.subscriptionsEnabled && (
+					<button ref={subscribeButton} type="button" onClick={() => setSubscribeOpen(true)}>
+						Subscribe
+					</button>
+				)}
+			</header>
+			{result && results[result] && (
+				<p className="notice" role={result.endsWith("error") ? "alert" : "status"}>
+					{results[result]}
+				</p>
+			)}
+			{unreachable && (
+				<p className="notice api-unreachable" role="alert">
+					API unreachable.{" "}
+					{snapshot ? "Showing the last available status. " : "Status is unavailable. "}
+					Retrying automatically when this tab is visible.
+				</p>
+			)}
+			{snapshot ? (
+				<>
+					<div className={`summary status-${summaryStatus}`} role="status">
+						<span aria-hidden="true">
+							{summaryStatus === "up" ? "✓" : summaryStatus === "unknown" ? "?" : "!"}
+						</span>{" "}
+						{summary}
 					</div>
-				</TabsContent>
-				<TabsContent value="incidents" className="space-y-4">
-					<IncidentList data={incidentData} />
-				</TabsContent>
-			</Tabs>
-			<h5 className="text-center text-gray-500 text-xs mt-4">
-				({new Date().getFullYear()}) {overviewData.public.companyName} Service Status App
-			</h5>
-		</>
+					<p className="last-updated">
+						Last updated:{" "}
+						<time dateTime={new Date(snapshot.updatedAt).toISOString()}>
+							{new Date(snapshot.updatedAt).toLocaleString()}
+						</time>
+						{" · "}Refreshes every 45 seconds while visible
+					</p>
+					<nav className="section-links" aria-label="Status sections">
+						<a href="#services">Services</a>
+						<a href="#incidents">Incidents ({activeIncidents} active)</a>
+					</nav>
+					<section id="services" aria-label="Services">
+						{snapshot.groups.map((group) => (
+							<Fragment key={group.name}>
+								<h2 className="group-title">{group.name}</h2>
+								{group.monitors.map((id) => {
+									const monitor = snapshot.monitors.find((entry) => entry.id === id);
+									return monitor ? <StatusMonitor key={id} data={monitor} /> : null;
+								})}
+							</Fragment>
+						))}
+						{empty && <p>No services are published yet.</p>}
+					</section>
+					<section id="incidents" aria-labelledby="incidents-title">
+						<h2 id="incidents-title">Incidents</h2>
+						<IncidentList data={snapshot.incidents} />
+					</section>
+				</>
+			) : (
+				!unreachable && <p role="status">Loading service status…</p>
+			)}
+			{subscribeOpen && snapshot?.public.subscriptionsEnabled && (
+				<Suspense fallback={<p role="status">Loading subscription form…</p>}>
+					<SubscribeDialog onClose={closeSubscribe} />
+				</Suspense>
+			)}
+			<footer>{snapshot?.public.companyName} Service Status</footer>
+		</main>
 	);
 }
-
-export default StatusPage;

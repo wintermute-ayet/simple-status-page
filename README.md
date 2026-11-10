@@ -2,11 +2,9 @@
 
 ## Introduction
 
-**Simple Status Page** is a Koa.js and React Vite (with
-[shadcn-ui](https://github.com/shadcn-ui/ui)) based monitoring application for tracking the status
-of services through HTTP and API endpoints. It utilizes a SQLite database for storage and is
-configured via a YAML file, streamlining the setup process. This application is deployable using
-Docker.
+**Simple Status Page** is a Koa.js and React Vite monitoring application for tracking the status of
+services through HTTP and API endpoints. It uses SQLite for storage and a YAML file for
+configuration, and can be deployed with Docker. The frontend uses native HTML controls and CSS.
 
 ## Features
 
@@ -75,7 +73,8 @@ of the configuration parameters:
   - `favicon`: Custom favicon in SVG format.
   - `logo`: Custom logo in SVG format.
   - `companyName`: The name displayed on the status page.
-  - `refreshInterval`: Time interval (in seconds) for the status page to refresh.
+  - `refreshInterval`: Legacy refresh setting retained for API compatibility. The frontend polls the
+    status snapshot every 45 seconds while visible.
   - `basedomain`: The base URL where the application is hosted.
 
 - **salt**:
@@ -291,8 +290,8 @@ data instead. Missing `value` defaults to zero; supplied values must be finite n
 
 `dailyThresholds.down` and `dailyThresholds.degraded` are fractions of known checks used for each
 calendar day's summary (defaults `0.001` and `0.005`). Unknown checks and days without data are
-excluded from uptime. No-data days have null uptime, and an entirely empty history displays an em
-dash instead of zero percent.
+excluded from uptime. No-data days have null uptime, and an entirely empty history displays "No
+data" instead of zero percent.
 
 HTTP failures log their error code, response status and diagnostic message; fatal errors and server
 failures include stacks. Configured credentials, Bearer values and push URL tokens are redacted.
@@ -323,10 +322,9 @@ headers are ignored by default; enable `proxy: true` only behind a trusted rever
 replaces forwarded headers. With proxy trust enabled, only the nearest forwarded client address is
 used (`maxIpsCount=1`), ignoring client-supplied prefixes. HSTS is sent only for HTTPS requests,
 including HTTPS reported by a trusted proxy. `HOST` and `PORT` control the listener (default
-`0.0.0.0:3000`); invalid ports fail startup. The CSP restricts scripts to same-origin files. Inline
-styles remain permitted because the current Radix dialog and tooltip dependencies inject scroll-lock
-styles via `react-style-singleton`. Incident messages render as escaped text with preserved line
-breaks, including legacy `<br>` separators.
+`0.0.0.0:3000`); invalid ports fail startup. The CSP restricts scripts and styles to same-origin
+files. Native controls and external CSS need no inline-style exception. Incident messages render as
+escaped text with preserved line breaks, including legacy `<br>` separators.
 
 Subscription links use HMAC-SHA256 with the configured `salt`, binding the address, purpose and
 expiry. Confirmations expire after 48 hours; request another confirmation if an older link has
@@ -353,31 +351,16 @@ Non-force `npm audit fix` was run for both projects, followed by an explicit Nod
 | -------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | Server production    | Zero findings after upgrading Nodemailer to 10.5.0                           | `npm audit --omit=dev` exits 0: `found 0 vulnerabilities`.                                      |
 | Server development   | 10 moderate package findings from minimatch through ESLint/typescript-eslint | Review the toolchain dependency upgrade when a compatible fix is available.                     |
-| Frontend production  | React Router/react-router-dom: 2 moderate; Zod: 1 high                       | Remove these dependencies in the planned frontend slimming commit.                              |
+| Frontend production  | Zero findings after removing the router and form dependencies                | `npm audit --omit=dev --prefix frontend-vite` exits 0: `found 0 vulnerabilities`.               |
 | Frontend development | Vite: 1 high; esbuild and the plugin-react dependency chain: 2 moderate      | Update the frontend build toolchain separately; the suggested audit fix changes major versions. |
 
 The full server audit reports 10 moderate development findings from
 [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) through the lint toolchain;
-these packages are excluded from the production image. The full frontend audit reports 6 findings (4
-moderate, 2 high); its production-only audit reports 3 (2 moderate, 1 high). These reports still
-exit 1. No forced upgrades were applied.
-
-Applicability assessment based on the advisories and current frontend code:
-
-- [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) concerns oversized array
-  validation. The subscription form validates one email string and has no array schemas; that
-  vulnerable path is unused. The server uses `validator`, not Zod.
-- [GHSA-wrjc-x8rr-h8h6](https://github.com/advisories/GHSA-wrjc-x8rr-h8h6) concerns
-  attacker-supplied navigation targets. This app uses `BrowserRouter` and `useLocation` without
-  `Link` or `useNavigate`, so the affected navigation path is absent.
-- [GHSA-337j-9hxr-rhxg](https://github.com/advisories/GHSA-337j-9hxr-rhxg) concerns data/framework
-  routing with manual SSR hydration. This app uses declarative routing and `createRoot`, without
-  that hydration/error-deserialization path.
-
-The production frontend findings are not applicable to these current code paths, but remain in the
-audit output. Remove the flagged frontend dependencies in commit 6 and reassess if routing or form
-schemas change. Vite/esbuild findings affect development tooling; production serves static assets
-through Koa. CI continues to report both project audits without blocking on them.
+these packages are excluded from the production image. The full frontend audit reports 3 development
+findings (2 moderate, 1 high), while its production-only audit is clean. Full development audits
+still exit 1; no forced upgrades were applied. The frontend slimming removes React Router, Zod and
+their advisory chains entirely. Vite/esbuild findings affect development tooling; production serves
+static assets through Koa. CI continues to report both production audits.
 
 ## Daily history, snapshots and preflight checks
 
@@ -408,8 +391,26 @@ when unchanged. Legacy overview, monitor-history and incident endpoints remain a
 The server reads the built index at startup and keeps an injected version in memory, preserving the
 container's read-only root filesystem. Its `status-snapshot` JSON data block escapes `<`, titles are
 HTML-escaped, and SVG logo/favicon values are encoded as data images. The frontend uses this data
-for its initial render, including history, without an API call. Existing refresh behavior remains
-until the polling/frontend update.
+for its initial render, including history, without an API call. Its escaped `data-etag` attribute
+seeds the first conditional poll.
+
+The frontend makes one `GET /api/status` per refresh, every 45 seconds, with `If-None-Match` once an
+ETag is available. A 304 keeps the existing snapshot without a render. Hidden tabs stop polling and
+abort pending requests; becoming visible triggers one immediate refresh. Requests time out after 10
+seconds. The page shows the snapshot's last-updated time and an "API unreachable" banner on failure,
+preserving the last good data and retrying automatically. Development falls back to the same
+endpoint when the injected JSON is absent or invalid.
+
+Daily bars include status symbols, date/uptime/degraded labels and a shared visible detail line per
+monitor. Tab enters the history; arrow keys, Home and End select days. No-data days are explicitly
+labelled and excluded from the uptime average. Colours follow `prefers-color-scheme`; incident text
+remains escaped with line breaks. The subscription dialog loads on demand and starts with an empty
+email field.
+
+`npm run buildall` enforces a total JavaScript budget below 70,000 gzip bytes, including lazy
+chunks. `npm run size --prefix frontend-vite` repeats the measurement using Node's `gzipSync`
+defaults. The frontend slimming reduced the built JavaScript from 115,695 to 50,988 gzip bytes
+(50,012 for the entry and 976 for the subscription dialog).
 
 Build the server with `npm run build` (also included in `npm run buildall`) before using the CLI:
 

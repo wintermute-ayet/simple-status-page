@@ -1,9 +1,9 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
 import StatusPage from "../pages/status-page";
-import { readSnapshot, type BootstrapSnapshot } from "./status-snapshot";
+import { parseSnapshot, readSnapshot, readSnapshotEtag } from "./status-snapshot";
+import { exampleSnapshot } from "../test-support";
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -20,40 +20,38 @@ it("falls back gracefully when the injected data is absent or malformed", () => 
 	}
 });
 it("renders its first frame with injected status and history before an API response", () => {
-	const snapshot: BootstrapSnapshot = {
-		public: {
-			companyName: "Example",
-			logo: "<svg>✓</svg>",
-			favicon: "",
-			refreshInterval: 900,
-			subscriptionsEnabled: false
-		},
-		groups: [{ name: "Services", monitors: [1] }],
-		incidents: [],
-		monitors: [
-			{
-				id: 1,
-				name: "Preloaded service",
-				description: "Preloaded description",
-				uptimeWording: "uptime",
-				status: "up",
-				ts: 1,
-				history: [{ date: "2030-01-01", status: "down", uptime: 75, degraded: 0 }]
-			}
-		]
-	};
+	const snapshot = exampleSnapshot();
 	inject(JSON.stringify(snapshot));
-	vi.spyOn(console, "error").mockImplementation(() => {}); // React Router's SSR layout-effect warning.
 	const fetch = vi.fn();
 	vi.stubGlobal("fetch", fetch);
 	expect(readSnapshot()).toEqual(snapshot);
-	const html = renderToStaticMarkup(
-		React.createElement(MemoryRouter, {}, React.createElement(StatusPage))
-	);
+	const html = renderToStaticMarkup(React.createElement(StatusPage));
 	expect(html).toContain("Preloaded service");
 	expect(html).toContain("Preloaded description");
 	expect(html).toContain("Operational");
 	expect(html).toContain("75.0%");
 	expect(html).toContain("Example");
 	expect(fetch).not.toHaveBeenCalled();
+});
+
+it("rejects malformed nested data instead of crashing the first render", () => {
+	const snapshot = exampleSnapshot();
+	for (const value of [
+		{ ...snapshot, updatedAt: NaN },
+		{ ...snapshot, updatedAt: Number.MAX_VALUE },
+		{ ...snapshot, public: { ...snapshot.public, subscriptionsEnabled: "yes" } },
+		{ ...snapshot, groups: [{ name: "Invalid", monitors: [99] }] },
+		{ ...snapshot, monitors: [null] },
+		{ ...snapshot, monitors: [snapshot.monitors[0], snapshot.monitors[0]] },
+		{ ...snapshot, monitors: [{ ...snapshot.monitors[0], history: [{ date: "bad" }] }] },
+		{ ...snapshot, incidents: [{ message: null }] }
+	])
+		expect(parseSnapshot(value)).toBeUndefined();
+});
+
+it("reads a valid injected ETag and rejects malformed header values", () => {
+	for (const value of ['W/"snapshot"', '"strong"', "bad\r\nheader", "unquoted", ""]) {
+		vi.stubGlobal("document", { getElementById: () => ({ getAttribute: () => value }) });
+		expect(readSnapshotEtag()).toBe(value.includes('"') ? value : undefined);
+	}
 });

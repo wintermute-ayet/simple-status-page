@@ -1,87 +1,35 @@
-import React from "react";
-import { CheckCircledIcon, CrossCircledIcon, QuestionMarkCircledIcon } from "@radix-ui/react-icons";
-import { Alert, AlertTitle, AlertDescription } from "./alert";
+import type { Incident } from "@/lib/status-snapshot";
 
-export interface Incident {
-	id: number;
-	monitor_id: number;
-	monitor_name: string;
-	type: string;
-	message: string;
-	status: string;
-	created: string;
-	modified: string;
-}
-
-type IncidentListProps = {
-	data: Incident[];
-};
-
-const StatusMonitor: React.FC<IncidentListProps> = ({ data }) => {
-	const renderStatus = (status: string) => {
-		if (status === "resolved") {
-			return (
-				<span className="grow text-end font-bold text-green-500">
-					<CheckCircledIcon className="inline mr-1" />
-					<span className="hidden lg:inline">Resolved</span>
-				</span>
-			);
-		}
-		if (status === "active") {
-			return (
-				<span className="grow text-end font-bold text-red-500">
-					<CrossCircledIcon className="inline mr-1" />
-					<span className="hidden lg:inline">Active</span>
-				</span>
-			);
-		}
-		return (
-			<span className="grow text-end font-bold text-gray-500">
-				<QuestionMarkCircledIcon className="inline mr-1" />
-				<span className="hidden lg:inline">Unknown</span>
-			</span>
-		);
-	};
-
+export default function IncidentList({ data }: { data: Incident[] }) {
+	if (!data.length) return <p className="muted">No incidents reported.</p>;
 	return (
-		<>
-			<div className="grid gap-4 grid-cols-1">
-				{data.map((incident, index) => (
-					<React.Fragment key={index}>
-						<Alert
-							className={
-								incident.status !== `active`
-									? ``
-									: incident.type == `degraded`
-										? `bg-orange-100`
-										: `bg-red-100`
-							}
+		<div className="incident-list">
+			{data.map((incident) => (
+				<article
+					className={`card incident ${incident.status === "active" ? `incident-${incident.type}` : ""}`}
+					key={incident.id}
+				>
+					<div className="incident-header">
+						<h3>
+							{incident.type === "down" ? "Service outage" : "Performance degradation"} —{" "}
+							{incident.monitor_name}
+						</h3>
+						<span
+							className={`current-status status-${incident.status === "resolved" ? "up" : incident.type}`}
 						>
-							<AlertTitle className="mb-2">
-								<div className="flex justify-between">
-									<div className="flex mr-5">
-										<p className="text-l">{incident.created.slice(0, -3)}</p>
-									</div>
-									<div className="flex-grow">
-										<p className="font-bold text-l">
-											{incident.type == `down` ? `Service Outage` : `Performance Degradation`} -{" "}
-											{incident.monitor_name}
-										</p>
-									</div>
-									<div className="flex-grow-0">{renderStatus(incident.status)}</div>
-								</div>
-							</AlertTitle>
-							<AlertDescription>
-								<div className="whitespace-pre-line">
-									{incident.message.replace(/<br\s*\/?\s*>/gi, "\n")}
-								</div>
-							</AlertDescription>
-						</Alert>
-					</React.Fragment>
-				))}
-			</div>
-		</>
+							<span aria-hidden="true">{incident.status === "resolved" ? "✓" : "!"}</span>{" "}
+							{incident.status === "resolved" ? "Resolved" : "Active"}
+						</span>
+					</div>
+					<p className="muted">
+						{incident.created} UTC
+						{incident.status === "resolved" ? ` · Resolved ${incident.modified} UTC` : ""}
+					</p>
+					<div className="whitespace-pre-line">
+						{incident.message.replace(/<br\s*\/?\s*>/gi, "\n")}
+					</div>
+				</article>
+			))}
+		</div>
 	);
-};
-
-export default StatusMonitor;
+}

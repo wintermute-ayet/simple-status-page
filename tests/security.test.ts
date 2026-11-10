@@ -155,6 +155,8 @@ describe("HTTP security headers", () => {
 			});
 			expect(plain.headers.get("Content-Security-Policy")).toContain("script-src 'self';");
 			expect(plain.headers.get("Content-Security-Policy")).not.toMatch(/script-src[^;]*'unsafe/);
+			expect(plain.headers.get("Content-Security-Policy")).toContain("style-src 'self';");
+			expect(plain.headers.get("Content-Security-Policy")).not.toContain("'unsafe-inline'");
 			expect(plain.headers.get("X-Content-Type-Options")).toBe("nosniff");
 			expect(plain.headers.get("Referrer-Policy")).toBe("no-referrer");
 			expect(plain.headers.get("X-Frame-Options")).toBe("DENY");

@@ -1,126 +1,90 @@
-"use client";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { apiBase } from "@/lib/status-poller";
 
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
-import * as z from "zod";
-
-import { Button } from "@/components/ui/button";
-import {
-	Form,
-	FormControl,
-	FormField,
-	FormItem,
-	FormLabel,
-	FormMessage
-} from "@/components/ui/form";
-
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-	DialogTrigger
-} from "@/components/ui/dialog";
-
-import { Input } from "@/components/ui/input";
-import { toast } from "@/components/ui/use-toast";
-import { useState } from "react";
-
-const baseUrl = import.meta.env.VITE_API_BASE_URL;
-
-const FormSchema = z.object({
-	email: z
-		.string()
-		.min(3, {
-			message: "Please enter your email."
-		})
-		.email("Please enter a valid email.")
-});
-
-export function SubscribeDialog() {
-	const [isDialogOpen, setIsDialogOpen] = useState(false);
-
-	const form = useForm<z.infer<typeof FormSchema>>({
-		resolver: zodResolver(FormSchema),
-		defaultValues: {
-			email: "mail@company.com"
-		}
-	});
-
-	function onSubmit(data: z.infer<typeof FormSchema>) {
-		fetch(`${baseUrl}/api/subscribe`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json"
-			},
-			body: JSON.stringify(data)
-		})
-			.then((response) => {
-				if (response.ok) {
-					return response.json();
-				}
-				throw new Error("Network response was not ok");
-			})
-			.then(() => {
-				toast({
-					title: "Successfully submitted!",
-					description: "Please check your inbox to confirm your subscription."
-				});
-				setIsDialogOpen(false);
-			})
-			.catch(() => {
-				toast({
-					variant: "destructive",
-					title: "Error!",
-					description: "There was a problem processing your request."
-				});
+export default function SubscribeDialog({ onClose }: { onClose: () => void }) {
+	const dialog = useRef<HTMLDialogElement>(null);
+	const input = useRef<HTMLInputElement>(null);
+	const request = useRef<AbortController>();
+	const [email, setEmail] = useState("");
+	const [pending, setPending] = useState(false);
+	const [error, setError] = useState("");
+	const [sent, setSent] = useState(false);
+	useEffect(() => {
+		const element = dialog.current!;
+		element.showModal();
+		input.current?.focus();
+		return () => {
+			request.current?.abort();
+			element.close();
+		};
+	}, []);
+	async function subscribe(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (pending || !event.currentTarget.reportValidity()) return;
+		setPending(true);
+		setError("");
+		const controller = new AbortController();
+		request.current = controller;
+		const timeout = setTimeout(() => controller.abort(), 10_000);
+		try {
+			const response = await fetch(`${apiBase}/api/subscribe`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ email: email.trim() }),
+				signal: controller.signal
 			});
+			if (!response.ok) throw new Error("Subscription request failed");
+			setSent(true);
+		} catch {
+			setError("Unable to subscribe. Please try again later.");
+		} finally {
+			clearTimeout(timeout);
+			setPending(false);
+		}
 	}
-
 	return (
-		<Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-			<DialogTrigger asChild>
-				<Button variant="outline">Subscribe</Button>
-			</DialogTrigger>
-			<DialogContent className="sm:max-w-[425px]">
-				<DialogHeader>
-					<DialogTitle>Subscribe For Updates</DialogTitle>
-					<DialogDescription>
-						By subscribing you will be notified of important status updates, incidents, and
-						scheduled maintenance.
-					</DialogDescription>
-				</DialogHeader>
-
-				<Form {...form}>
-					<form onSubmit={form.handleSubmit(onSubmit)}>
-						<FormField
-							control={form.control}
-							name="email"
-							render={({ field }) => (
-								<FormItem>
-									<div className="grid gap-4 py-4">
-										<div className="grid grid-cols-4 items-center gap-x-4 gap-y-1">
-											<FormLabel className="text-right">Email</FormLabel>
-											<FormControl>
-												<Input placeholder="mail@company.com" className="col-span-3" {...field} />
-											</FormControl>
-											<div className="flex w-full col-span-1"></div>
-											<div className="flex w-full col-span-3">
-												<FormMessage />
-											</div>
-										</div>
-									</div>
-								</FormItem>
-							)}
-						/>
-						<DialogFooter>
-							<Button type="submit">Submit</Button>
-						</DialogFooter>
-					</form>
-				</Form>
-			</DialogContent>
-		</Dialog>
+		<dialog
+			ref={dialog}
+			aria-labelledby="subscribe-title"
+			aria-describedby="subscribe-description"
+			onCancel={(event) => {
+				event.preventDefault();
+				onClose();
+			}}
+		>
+			<div className="dialog-header">
+				<h2 id="subscribe-title">Subscribe for updates</h2>
+				<button type="button" onClick={onClose} aria-label="Close subscription form">
+					×
+				</button>
+			</div>
+			<p id="subscribe-description">
+				Receive important service updates and incident notifications.
+			</p>
+			{sent ? (
+				<p role="status">Please check your inbox to confirm your subscription.</p>
+			) : (
+				<form onSubmit={(event) => void subscribe(event)}>
+					<label htmlFor="subscribe-email">Email address</label>
+					<input
+						ref={input}
+						id="subscribe-email"
+						name="email"
+						type="email"
+						autoComplete="email"
+						placeholder="Email address"
+						maxLength={254}
+						required
+						value={email}
+						onChange={(event) => setEmail(event.target.value)}
+						disabled={pending}
+					/>
+					{error && <p role="alert">{error}</p>}
+					<button type="submit" disabled={pending}>
+						{pending ? "Submitting…" : "Subscribe"}
+					</button>
+				</form>
+			)}
+		</dialog>
 	);
 }
