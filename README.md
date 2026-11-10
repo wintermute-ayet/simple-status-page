@@ -289,3 +289,56 @@ supplied values must be finite numbers.
 calendar day's summary (defaults `0.001` and `0.005`). Unknown checks and days without data are
 excluded from uptime. No-data days have null uptime, and an entirely empty history displays an em
 dash instead of zero percent.
+
+## HTTP and subscription security
+
+API monitor `uuid` and optional `tokens: []` entries all authenticate the same monitor, allowing
+rotation without an interruption. Tokens must be unique and at least 16 characters long. The
+existing `GET /api/monitor/<token>?status=up&value=1` callback remains supported. POST accepts JSON
+or the same query parameters and requires `Authorization: Bearer <token>`:
+
+```sh
+curl --request POST https://example.com/api/monitor \
+  --header 'Authorization: Bearer <monitor-token>' \
+  --header 'Content-Type: application/json' \
+  --data '{"status":"up","value":1}'
+```
+
+`POST /api/monitor/<token>` also works; the path and Bearer tokens must belong to the same monitor.
+Token comparisons use equal-length SHA-256 digests and constant-time comparison. The application
+logs monitor ids only. Configure reverse proxies to omit push URLs from access logs.
+
+CORS is disabled unless `cors: ["https://example.com"]` lists explicit allowed origins. Proxy
+headers are ignored by default; enable `proxy: true` only behind a trusted reverse proxy that
+replaces forwarded headers. HSTS is sent only for HTTPS requests, including HTTPS reported by a
+trusted proxy. `HOST` and `PORT` control the listener (default `0.0.0.0:3000`); invalid ports fail
+startup. The CSP restricts scripts to same-origin files. Inline styles remain permitted because the
+current Radix dialog and tooltip dependencies inject scroll-lock styles via `react-style-singleton`.
+Incident messages render as escaped text with preserved line breaks, including legacy `<br>`
+separators.
+
+Subscription links use HMAC-SHA256 with the configured `salt`, binding the address, purpose and
+expiry. Confirmations expire after 48 hours; request another confirmation if an older link has
+expired. Legacy confirmation links are no longer accepted. New unsubscribe links do not expire, and
+existing legacy unsubscribe links remain valid, including when SMTP is disabled. Keep `salt` stable
+to preserve those links.
+
+The subscribe endpoint is disabled without SMTP. With SMTP, every subscription attempt counts toward
+a limit of 5 per client IP per 15 minutes and 100 globally per hour. Excess requests return 429 with
+`Retry-After` in seconds. These fixed-window counters are in memory and reset on restart.
+
+### Dependency audit follow-up
+
+Non-force `npm audit fix` was run for both projects. The lockfile now resolves `validator` to
+13.15.35 with no reported advisory. The remaining reports on 2026-11-10 are:
+
+| Project              | Remaining report                                                             | Follow-up                                                                                       |
+| -------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Server production    | Nodemailer 6.10.1: high severity                                             | The suggested fix is the major upgrade to 10.5.0; deferred for compatibility review.            |
+| Server development   | 10 moderate package findings from minimatch through ESLint/typescript-eslint | Review the toolchain dependency upgrade when a compatible fix is available.                     |
+| Frontend production  | React Router/react-router-dom: 2 moderate; Zod: 1 high                       | Remove these dependencies in the planned frontend slimming commit.                              |
+| Frontend development | Vite: 1 high; esbuild and the plugin-react dependency chain: 2 moderate      | Update the frontend build toolchain separately; the suggested audit fix changes major versions. |
+
+The full audits therefore report 11 server findings (10 moderate, 1 high) and 6 frontend findings (4
+moderate, 2 high). `npm audit --omit=dev` reports 1 high server finding and 3 frontend findings (2
+moderate, 1 high). Audit reports remain non-blocking in CI; no forced upgrades were applied.

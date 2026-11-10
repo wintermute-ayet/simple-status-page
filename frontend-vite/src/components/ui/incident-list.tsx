@@ -7,7 +7,7 @@ export interface Incident {
 	monitor_id: number;
 	monitor_name: string;
 	type: string;
-	message: { __html: string };
+	message: string;
 	status: string;
 	created: string;
 	modified: string;
@@ -72,7 +72,9 @@ const StatusMonitor: React.FC<IncidentListProps> = ({ data }) => {
 								</div>
 							</AlertTitle>
 							<AlertDescription>
-								<div dangerouslySetInnerHTML={{ __html: incident.message }}></div>
+								<div className="whitespace-pre-line">
+									{incident.message.replace(/<br\s*\/?\s*>/gi, "\n")}
+								</div>
 							</AlertDescription>
 						</Alert>
 					</React.Fragment>

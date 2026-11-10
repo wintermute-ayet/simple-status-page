@@ -50,8 +50,6 @@ export function SubscribeDialog() {
 	});
 
 	function onSubmit(data: z.infer<typeof FormSchema>) {
-		console.log("submit", data);
-
 		fetch(`${baseUrl}/api/subscribe`, {
 			method: "POST",
 			headers: {

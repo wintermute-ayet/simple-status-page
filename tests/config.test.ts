@@ -10,6 +10,24 @@ describe("configuration validation", () => {
 		expect(config.smtp).toBeUndefined();
 		expect(config.monitors[0].onMissing).toBe("down");
 		expect(config.dailyThresholds).toEqual({ down: 0.001, degraded: 0.005 });
+		expect(config.cors).toEqual([]);
+		expect(config.proxy).toBe(false);
+	});
+	it("accepts explicit CORS origins and proxy trust only", () => {
+		expect(makeConfig({}, { cors: ["https://EXAMPLE.com/"], proxy: true })).toMatchObject({
+			cors: ["https://example.com"],
+			proxy: true
+		});
+		for (const cors of [
+			"*",
+			["*"],
+			["null"],
+			["https://example.com/path"],
+			["https://example.com/?query=1"],
+			["https://example.com/#fragment"]
+		])
+			expect(() => makeConfig({}, { cors })).toThrow();
+		expect(() => makeConfig({}, { proxy: "true" })).toThrow(/boolean/);
 	});
 	it("rejects duplicate monitor ids and API tokens without echoing token values", () => {
 		const monitor = rawConfig().monitors[0];

@@ -54,6 +54,8 @@ export interface Config {
 	database: { path: string };
 	monitors: MonitorEntity[];
 	dailyThresholds: DailyThresholds;
+	cors: string[];
+	proxy: boolean;
 }
 
 function object(value: unknown, location: string, keys: string[]): Record<string, unknown> {
@@ -119,7 +121,9 @@ export function validateConfig(
 		"groups",
 		"database",
 		"monitors",
-		"dailyThresholds"
+		"dailyThresholds",
+		"cors",
+		"proxy"
 	]);
 	const publicConfig = object(root.public ?? {}, "public", [
 		"favicon",
@@ -282,6 +286,12 @@ export function validateConfig(
 	};
 	if (Object.values(dailyThresholds).some((threshold) => threshold > 1))
 		throw new Error("dailyThresholds must be fractions between 0 and 1");
+	const cors = array(root.cors, "cors").map((origin, index) => {
+		const parsed = new URL(httpUrl(origin, `cors[${index}]`));
+		if (parsed.pathname !== "/" || parsed.search || parsed.hash)
+			throw new Error("cors must contain origins without paths or queries");
+		return parsed.origin;
+	});
 	return {
 		public: {
 			favicon: text(publicConfig.favicon, "public.favicon", ""),
@@ -298,7 +308,9 @@ export function validateConfig(
 		groups,
 		database: { path: text(database.path, "database.path") },
 		monitors,
-		dailyThresholds
+		dailyThresholds,
+		cors,
+		proxy: boolean(root.proxy, "proxy", false)
 	};
 }
 

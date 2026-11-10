@@ -3,7 +3,6 @@ import Router from "@koa/router";
 import bodyParser from "koa-bodyparser";
 import serve from "koa-static";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import cors from "@koa/cors";
 import consoleStamp from "console-stamp";
 import validator from "validator";
@@ -26,15 +25,14 @@ import migrateDatabase from "./database-migrations";
 import { createMailQueue, type MailQueue } from "./mail";
 import { MonitorRuntime, type HttpRequest } from "./monitors";
 import { installProcessHandlers } from "./lifecycle";
+import {
+	PushTokens,
+	SubscriptionLinks,
+	SubscriptionRateLimiter,
+	securityHeaders,
+	listenOptions
+} from "./security";
 
-function legacyHash(email: string, salt: string): string {
-	return createHash("sha256")
-		.update(email + salt)
-		.digest("base64");
-}
-function unsubscribeLink(config: Config, email: string): string {
-	return `${config.public.basedomain}/api/unsubscribe?${new URLSearchParams({ email, hash: legacyHash(email, config.salt) })}`;
-}
 export function parseReport(
 	status: unknown,
 	value: unknown
@@ -53,7 +51,11 @@ export function createApplication(
 	options: { mail?: MailQueue; request?: HttpRequest } = {}
 ) {
 	const app = new Koa();
+	app.proxy = config.proxy;
 	const mail = options.mail ?? createMailQueue(config.smtp);
+	const tokens = new PushTokens(config.monitors);
+	const links = new SubscriptionLinks(config.salt, config.public.basedomain);
+	const subscriptionLimits = new SubscriptionRateLimiter();
 	const notify = async (incident: IncidentRow): Promise<void> => {
 		if (!mail || !config.smtp) return;
 		const name =
@@ -64,7 +66,7 @@ export function createApplication(
 			: `An incident for ${name} has been created.\n\n${incident.message}`;
 		await Promise.allSettled(
 			getActiveSubscribers(db).map(async (subscriber) => {
-				const unsubscribe = unsubscribeLink(config, subscriber.email);
+				const unsubscribe = links.create(subscriber.email, "unsubscribe");
 				await mail.send({
 					from: config.smtp!.from,
 					to: subscriber.email,
@@ -79,6 +81,7 @@ export function createApplication(
 	app.on("error", () => {
 		console.error("HTTP request failed");
 	});
+	app.use(securityHeaders);
 	app.use(async (ctx, next) => {
 		try {
 			await next();
@@ -90,23 +93,62 @@ export function createApplication(
 			if (ctx.status >= 500) app.emit("error", error, ctx);
 		}
 	});
-	app.use(cors());
-	app.use(bodyParser());
+	if (config.cors.length > 0) {
+		app.use(
+			cors({
+				origin: (ctx) => (config.cors.includes(ctx.get("Origin")) ? ctx.get("Origin") : ""),
+				allowMethods: ["GET", "POST"],
+				allowHeaders: ["Authorization", "Content-Type"],
+				maxAge: 600
+			})
+		);
+	}
+	app.use(async (ctx, next) => {
+		if (ctx.method === "POST" && /^\/api\/subscribe\/?$/i.test(ctx.path)) {
+			if (!config.smtp || !mail) ctx.throw(404, "Subscriptions disabled");
+			const limit = subscriptionLimits.consume(ctx.ip);
+			if (!limit.allowed) {
+				ctx.status = 429;
+				ctx.set("Retry-After", String(limit.retryAfter));
+				ctx.body = { error: "Too many subscription requests" };
+				return;
+			}
+		}
+		await next();
+	});
+	app.use(bodyParser({ jsonLimit: "16kb", formLimit: "16kb" }));
 	const router = new Router();
 	router.get("/healthz", (ctx: Context) => {
 		ctx.body = { status: "ok" };
 	});
-	router.get("/api/monitor/:token", (ctx: Context) => {
-		const monitor = config.monitors.find(
-			(candidate) => candidate.type === "api" && candidate.uuid === ctx.params.token
-		);
+	const pushReport = (ctx: Context) => {
+		const bearer = /^Bearer ([^\s]+)$/i.exec(ctx.get("Authorization"))?.[1];
+		const monitor = tokens.lookup(ctx.method === "POST" ? bearer : ctx.params.token);
+		if (ctx.method === "POST" && !monitor) {
+			ctx.set("WWW-Authenticate", "Bearer");
+			ctx.throw(401, "Invalid authentication");
+		}
 		if (!monitor) ctx.throw(404, "Monitor not found");
-		const report = parseReport(ctx.query.status, ctx.query.value);
+		if (
+			ctx.method === "POST" &&
+			ctx.params.token &&
+			tokens.lookup(ctx.params.token)?.id !== monitor.id
+		)
+			ctx.throw(404, "Monitor not found");
+		const body: unknown = ctx.request.body;
+		const input =
+			ctx.method === "POST" && typeof body === "object" && body !== null && "status" in body
+				? body
+				: ctx.query;
+		const report = parseReport(input.status, "value" in input ? input.value : undefined);
 		if (!report) ctx.throw(400, "Status and value must be valid");
 		runtime.receiveReport(monitor.id, report.status, report.value);
 		console.info(`Monitor #${monitor.id} callback received`);
 		ctx.body = { status: "ok" };
-	});
+	};
+	router.get("/api/monitor/:token", pushReport);
+	router.post("/api/monitor/:token", pushReport);
+	router.post("/api/monitor", pushReport);
 	router.get("/api/overview", (ctx: Context) => {
 		const latest = getMonitorsLatestStatus(db);
 		const assigned = new Set(config.groups.flatMap((group) => group.monitors));
@@ -153,25 +195,24 @@ export function createApplication(
 			typeof body === "object" && body !== null && "email" in body ? body.email : undefined;
 		if (typeof email !== "string" || !validator.isEmail(email)) ctx.throw(400, "Invalid email");
 		if (addSubscriber(db, email)) {
-			const link = `${config.public.basedomain}/api/confirm-subscription?${new URLSearchParams({ email, hash: legacyHash(email, config.salt) })}`;
+			const link = links.create(email, "confirm");
 			const delivered = await mail.send({
 				from: config.smtp.from,
 				to: email,
 				subject: `Confirm Your ${config.public.companyName} Status Subscription`,
 				text: `Confirm your subscription:\n\n${link}\n\nIf you did not request this, ignore this message.`,
-				headers: { "List-Unsubscribe": `<${unsubscribeLink(config, email)}>` }
+				headers: { "List-Unsubscribe": `<${links.create(email, "unsubscribe")}>` }
 			});
 			if (!delivered) ctx.throw(503, "Mail temporarily unavailable");
 		}
 		ctx.body = { status: "ok" };
 	});
 	router.get("/api/confirm-subscription", (ctx: Context) => {
-		const { email, hash } = ctx.query;
+		const { email } = ctx.query;
 		if (
 			typeof email !== "string" ||
-			typeof hash !== "string" ||
 			!validator.isEmail(email) ||
-			hash !== legacyHash(email, config.salt) ||
+			!links.verify(email, "confirm", ctx.query) ||
 			!getSubscriber(db, email)
 		) {
 			ctx.redirect("/?result=subscribe-error");
@@ -181,12 +222,11 @@ export function createApplication(
 		ctx.redirect("/?result=subscribe-success");
 	});
 	router.get("/api/unsubscribe", (ctx: Context) => {
-		const { email, hash } = ctx.query;
+		const { email } = ctx.query;
 		if (
 			typeof email !== "string" ||
-			typeof hash !== "string" ||
 			!validator.isEmail(email) ||
-			hash !== legacyHash(email, config.salt)
+			!links.verify(email, "unsubscribe", ctx.query)
 		) {
 			ctx.redirect("/?result=unsubscribe-error");
 			return;
@@ -200,6 +240,7 @@ export function createApplication(
 }
 
 export function startServer(config = readConfig(), options: { port?: number; host?: string } = {}) {
+	const binding = listenOptions();
 	const db = initializeDatabase(config.database.path);
 	try {
 		migrateDatabase(db);
@@ -208,7 +249,7 @@ export function startServer(config = readConfig(), options: { port?: number; hos
 		throw error;
 	}
 	const service = createApplication(config, db);
-	const server = service.app.listen(options.port ?? 3000, options.host);
+	const server = service.app.listen(options.port ?? binding.port, options.host ?? binding.host);
 	service.runtime.start();
 	const cleanup = () => {
 		try {
