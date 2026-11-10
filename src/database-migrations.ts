@@ -82,6 +82,28 @@ const migrations: Migration[] = [
             SELECT monitor_id, status, COALESCE(val, 0), COALESCE(STRFTIME('%s', created) * 1000, 0)
             FROM monitor_checks WHERE id IN (SELECT MAX(id) FROM monitor_checks GROUP BY monitor_id);`);
 		}
+	},
+	{
+		id: 4,
+		script: (db) => {
+			db.exec(`CREATE INDEX IF NOT EXISTS idx_monitor_checks_monitor_created
+				ON monitor_checks (monitor_id, created);
+				CREATE TABLE IF NOT EXISTS monitor_daily (
+					monitor_id INTEGER NOT NULL,
+					day TEXT NOT NULL,
+					up INTEGER NOT NULL DEFAULT 0,
+					degraded INTEGER NOT NULL DEFAULT 0,
+					down INTEGER NOT NULL DEFAULT 0,
+					PRIMARY KEY (monitor_id, day));
+				INSERT INTO monitor_daily (monitor_id, day, up, degraded, down)
+				SELECT monitor_id, DATE(created), SUM(status='up'), SUM(status='degraded'), SUM(status='down')
+				FROM monitor_checks INDEXED BY idx_monitor_checks_created
+				WHERE created >= DATE('now', '-90 days') AND created < DATE('now', '+1 day')
+					AND status IN ('up', 'degraded', 'down')
+				GROUP BY monitor_id, DATE(created)
+				ON CONFLICT(monitor_id, day) DO UPDATE SET
+					up=excluded.up, degraded=excluded.degraded, down=excluded.down;`);
+		}
 	}
 ];
 

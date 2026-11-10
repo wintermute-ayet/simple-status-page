@@ -30,13 +30,15 @@ describe("database migrations", () => {
 				{ name: "monitor_checks" },
 				{ name: "subscribers" },
 				{ name: "incidents" },
-				{ name: "monitor_state" }
+				{ name: "monitor_state" },
+				{ name: "monitor_daily" }
 			])
 		);
 		expect(db.prepare("SELECT id FROM migrations ORDER BY id").all()).toEqual([
 			{ id: 1 },
 			{ id: 2 },
-			{ id: 3 }
+			{ id: 3 },
+			{ id: 4 }
 		]);
 		expect(db.prepare("PRAGMA index_info(idx_monitor_checks_monitor_id)").all()).toEqual([
 			{ seqno: 0, cid: 1, name: "monitor_id" }
@@ -53,7 +55,7 @@ describe("database migrations", () => {
 		expect(db.prepare("SELECT monitor_id, status, val FROM monitor_checks").all()).toEqual([
 			{ monitor_id: 1, status: "up", val: 17 }
 		]);
-		expect(db.prepare("SELECT COUNT(*) AS count FROM migrations").get()).toEqual({ count: 3 });
+		expect(db.prepare("SELECT COUNT(*) AS count FROM migrations").get()).toEqual({ count: 4 });
 	});
 	it("preserves legacy raw checks and extends them to accept unknown", () => {
 		db.exec(`CREATE TABLE migrations (id INTEGER PRIMARY KEY); INSERT INTO migrations VALUES (1), (2);
@@ -78,6 +80,7 @@ describe("database migrations", () => {
 		);
 		expect(() => addMonitorStatus(db, 1, "up", 7, initialMonitorState(1))).toThrow("state failed");
 		expect(db.prepare("SELECT * FROM monitor_checks").all()).toEqual([]);
+		expect(db.prepare("SELECT * FROM monitor_daily").all()).toEqual([]);
 	});
 });
 

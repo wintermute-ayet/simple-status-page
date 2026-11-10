@@ -342,3 +342,49 @@ Non-force `npm audit fix` was run for both projects. The lockfile now resolves `
 The full audits therefore report 11 server findings (10 moderate, 1 high) and 6 frontend findings (4
 moderate, 2 high). `npm audit --omit=dev` reports 1 high server finding and 3 frontend findings (2
 moderate, 1 high). Audit reports remain non-blocking in CI; no forced upgrades were applied.
+
+## Daily history, snapshots and preflight checks
+
+Migration 4 creates `monitor_daily` and backfills the last 91 UTC calendar dates (90 days ago
+through today) in one SQL aggregation. It uses the existing timestamp index to bound the scan; the
+migration and its completion marker commit together. Conflict updates replace counts rather than
+adding them, so re-running the backfill does not double-count. Each subsequent raw check, daily
+counter and runtime-state update commits in the same transaction. Unknown checks remain in raw
+history and state but add no daily samples. Missing or zero-count days have null uptime; the
+snapshot's overall uptime averages only days with known checks. Daily thresholds retain their
+existing meaning, including degraded checks counting toward uptime.
+
+SQLite uses WAL, `synchronous=NORMAL`, a 5-second busy timeout, and the `(monitor_id, created)`
+index. Cleanup still removes raw checks older than 91 days, trims expired daily buckets and requests
+a bounded incremental vacuum. New files enable incremental auto-vacuum before creating tables.
+Existing databases that use `auto_vacuum=NONE` need a separate one-time `VACUUM` after selecting
+`auto_vacuum=INCREMENTAL` to reclaim pages incrementally; startup does not perform a full rewrite of
+an existing database.
+
+`GET /api/status` returns public configuration, visible monitors and their 91-day histories, groups,
+current incidents and recent incidents. It excludes monitor tokens and private config. The JSON,
+gzip and Brotli representations are built in memory at startup, after each recorded check/incident
+change and after cleanup. Requests do not query SQLite or serialize/compress the snapshot. Responses
+use a weak ETag shared across encodings, `Vary: Accept-Encoding`, and
+`Cache-Control: public, max-age=15, stale-while-revalidate=60`. Send `If-None-Match` to receive 304
+when unchanged. Legacy overview, monitor-history and incident endpoints remain available.
+
+The server reads the built index at startup and keeps an injected version in memory, preserving the
+container's read-only root filesystem. Its `status-snapshot` JSON data block escapes `<`, titles are
+HTML-escaped, and SVG logo/favicon values are encoded as data images. The frontend uses this data
+for its initial render, including history, without an API call. Existing refresh behavior remains
+until the polling/frontend update.
+
+Build the server with `npm run build` (also included in `npm run buildall`) before using the CLI:
+
+```sh
+node dist/cli.js check-config [config-path]
+node dist/cli.js check-monitors [config-path]
+```
+
+The optional path takes precedence over `CONFIG_PATH`, then the usual `.yaml`/`.yml` defaults.
+`npm run check-config -- [config-path]` and `npm run check-monitors -- [config-path]` are aliases.
+Invalid configuration exits 1. Monitor checks run each HTTP monitor once with the normal timeout,
+redirect and body safeguards, print id/name/status/elapsed (milliseconds), and exit 1 if any is
+down. They use an isolated in-memory database and do not send notifications or change deployment
+data. `npm test` compiles the server first so CLI tests exercise the actual `dist/cli.js` process.

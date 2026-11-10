@@ -29,7 +29,8 @@ export class MonitorRuntime {
 		private config: Config,
 		private db: Database,
 		private notify: NotifyIncident = async () => {},
-		private request: HttpRequest = (url, options) => axios.get<unknown>(url, options)
+		private request: HttpRequest = (url, options) => axios.get<unknown>(url, options),
+		private onChange: () => void = () => {}
 	) {
 		this.states = loadMonitorStates(db);
 		for (const monitor of config.monitors) {
@@ -91,6 +92,7 @@ export class MonitorRuntime {
 			return changes;
 		})();
 		this.states.set(monitor.id, state);
+		this.onChange();
 		console.info(`Monitor #${monitor.id} tracking ${status}`);
 		const results = await Promise.allSettled(incidents.map((incident) => this.notify(incident)));
 		if (results.some((result) => result.status === "rejected"))
@@ -115,6 +117,7 @@ export class MonitorRuntime {
 		} else {
 			saveMonitorState(this.db, state);
 			this.states.set(monitor.id, state);
+			this.onChange();
 		}
 	}
 	async checkHTTPMonitor(monitor: MonitorEntity): Promise<void> {
@@ -177,6 +180,7 @@ export class MonitorRuntime {
 			if (status === "down" && state.retries < monitor.retries) {
 				saveMonitorState(this.db, state);
 				this.states.set(monitor.id, state);
+				this.onChange();
 				return;
 			}
 			await this.record(monitor, state, status, elapsedMs);

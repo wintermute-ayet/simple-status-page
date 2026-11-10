@@ -1,7 +1,13 @@
 import { createServer, type Server } from "node:http";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import type Koa from "koa";
 import { validateConfig } from "../src/config";
+
+export function temporaryDirectory(prefix: string): string {
+	mkdirSync("node_modules/.cache", { recursive: true });
+	return mkdtempSync(`node_modules/.cache/${prefix}-`);
+}
 
 export const testToken = "test-primary-monitor-token";
 export const testEmail = ["subscriber", "example.com"].join("@");

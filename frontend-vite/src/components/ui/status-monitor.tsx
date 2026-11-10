@@ -17,6 +17,7 @@ export interface Monitor {
 	ts: number;
 	description: string;
 	uptimeWording: string;
+	history?: UptimeDay[];
 }
 
 type UptimeDay = {
@@ -39,15 +40,19 @@ const StatusMonitor: React.FC<StatusMonitorProps> = ({ data }) => {
 		date.setDate(date.getDate() - (90 - i));
 		return {
 			date: date.toISOString().split("T")[0], // format as 'YYYY-MM-DD'
-			uptime: 0,
-			degraded: 0,
+			uptime: null,
+			degraded: null,
 			status: "unknown" as const
 		};
 	});
 
-	const [statusData, setStatusData] = useState<UptimeDay[]>(initialData);
+	const [statusData, setStatusData] = useState<UptimeDay[]>(data.history ?? initialData);
 
 	useEffect(() => {
+		if (data.history) {
+			setStatusData(data.history);
+			return;
+		}
 		// set the key for our cache
 		const cacheKey = `${data.id}-${data.ts}`;
 
@@ -65,7 +70,7 @@ const StatusMonitor: React.FC<StatusMonitorProps> = ({ data }) => {
 				setStatusData(data);
 			})
 			.catch((error) => console.error("Error fetching monitor status:", error));
-	}, [data.id, data.ts]); // invoke if [data.id or] data.ts changes
+	}, [data.id, data.ts, data.history]);
 
 	const validDays = statusData.filter((day) => day.status !== "unknown");
 

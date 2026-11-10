@@ -9,7 +9,19 @@ function typedStatement<Parameters extends unknown[], Row>(db: Database, sql: st
 }
 
 export function initializeDatabase(dbPath: string): Database {
-	return new DatabaseConstructor(dbPath);
+	const db = new DatabaseConstructor(dbPath);
+	try {
+		// New files support incremental reclamation. Existing files require a one-time VACUUM
+		// to change auto_vacuum; never rewrite a large deployed database during startup.
+		db.pragma("auto_vacuum = INCREMENTAL");
+		db.pragma("journal_mode = WAL");
+		db.pragma("synchronous = NORMAL");
+		db.pragma("busy_timeout = 5000");
+		return db;
+	} catch (error) {
+		db.close();
+		throw error;
+	}
 }
 export interface MonitorState {
 	monitor_id: number;
@@ -54,16 +66,23 @@ export function addMonitorStatus(
 	value: number,
 	state?: MonitorState
 ): void {
-	const write = () => {
-		db.prepare("INSERT INTO monitor_checks (monitor_id, status, val) VALUES (?, ?, ?)").run(
-			id,
-			status,
-			value
-		);
+	db.transaction(() => {
+		const inserted = db
+			.prepare("INSERT INTO monitor_checks (monitor_id, status, val) VALUES (?, ?, ?)")
+			.run(id, status, value);
+		// Derive the UTC day from this exact check, including checks inserted at midnight.
+		// Unknown remains in raw history/state and contributes no uptime samples.
+		if (status !== "unknown")
+			db.prepare(
+				`
+			INSERT INTO monitor_daily (monitor_id, day, up, degraded, down)
+			SELECT monitor_id, DATE(created), status='up', status='degraded', status='down'
+			FROM monitor_checks WHERE id=?
+			ON CONFLICT(monitor_id, day) DO UPDATE SET up=up+excluded.up,
+				degraded=degraded+excluded.degraded, down=down+excluded.down`
+			).run(inserted.lastInsertRowid);
 		if (state) saveMonitorState(db, state);
-	};
-	if (state) db.transaction(write)();
-	else write();
+	})();
 }
 export interface SubscriberRow {
 	id: number;
@@ -86,6 +105,51 @@ export interface HistoryDay {
 	uptime: number | null;
 	degraded: number | null;
 	status: MonitorStatus;
+}
+export function getLatestMonitorStatus(db: Database, id: number): MonitorStatus {
+	return (
+		typedStatement<[number], { status: MonitorStatus }>(
+			db,
+			"SELECT status FROM monitor_checks WHERE monitor_id=? ORDER BY id DESC LIMIT 1"
+		).get(id)?.status ?? "unknown"
+	);
+}
+
+export function getDailyHistory(
+	db: Database,
+	id: number,
+	thresholds: DailyThresholds,
+	now = new Date()
+): HistoryDay[] {
+	const start = new Date(now);
+	start.setUTCDate(start.getUTCDate() - 90);
+	const rows = typedStatement<
+		[number, string, string],
+		{ day: string; up: number; degraded: number; down: number }
+	>(
+		db,
+		"SELECT day, up, degraded, down FROM monitor_daily WHERE monitor_id=? AND day>=? AND day<=? ORDER BY day"
+	).all(id, start.toISOString().slice(0, 10), now.toISOString().slice(0, 10));
+	const byDate = new Map(rows.map((row) => [row.day, row]));
+	return Array.from({ length: 91 }, (_, offset) => {
+		const day = new Date(start);
+		day.setUTCDate(day.getUTCDate() + offset);
+		const date = day.toISOString().slice(0, 10);
+		const row = byDate.get(date);
+		const total = row ? row.up + row.degraded + row.down : 0;
+		if (!row || total === 0) return { date, uptime: null, degraded: null, status: "unknown" };
+		return {
+			date,
+			uptime: Math.round(((row.up + row.degraded) / total) * 10000) / 100,
+			degraded: Math.round((row.degraded / total) * 10000) / 100,
+			status:
+				row.down / total > thresholds.down
+					? "down"
+					: row.degraded / total > thresholds.degraded
+						? "degraded"
+						: "up"
+		};
+	});
 }
 export function getMonitors(db: Database): { id: number; name: string; description: string }[] {
 	return typedStatement<[], { id: number; name: string; description: string }>(
@@ -206,6 +270,12 @@ export function getIncidents(db: Database, days: number): IncidentRow[] {
 	);
 }
 export function cleanupTables(db: Database): void {
-	db.prepare("DELETE FROM subscribers WHERE active=0 AND created<DATETIME('now', '-14 day')").run();
-	db.prepare("DELETE FROM monitor_checks WHERE created<DATETIME('now', '-91 day')").run();
+	db.transaction(() => {
+		db.prepare(
+			"DELETE FROM subscribers WHERE active=0 AND created<DATETIME('now', '-14 day')"
+		).run();
+		db.prepare("DELETE FROM monitor_checks WHERE created<DATETIME('now', '-91 day')").run();
+		db.prepare("DELETE FROM monitor_daily WHERE day<DATE('now', '-90 days')").run();
+	})();
+	db.pragma("incremental_vacuum(200)");
 }

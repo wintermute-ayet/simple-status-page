@@ -25,6 +25,7 @@ import migrateDatabase from "./database-migrations";
 import { createMailQueue, type MailQueue } from "./mail";
 import { MonitorRuntime, type HttpRequest } from "./monitors";
 import { installProcessHandlers } from "./lifecycle";
+import { StatusCache, readIndexTemplate } from "./status";
 import {
 	PushTokens,
 	SubscriptionLinks,
@@ -48,7 +49,7 @@ export function parseReport(
 export function createApplication(
 	config: Config,
 	db: Database,
-	options: { mail?: MailQueue; request?: HttpRequest } = {}
+	options: { mail?: MailQueue; request?: HttpRequest; indexHtml?: string } = {}
 ) {
 	const app = new Koa();
 	app.proxy = config.proxy;
@@ -56,6 +57,7 @@ export function createApplication(
 	const tokens = new PushTokens(config.monitors);
 	const links = new SubscriptionLinks(config.salt, config.public.basedomain);
 	const subscriptionLimits = new SubscriptionRateLimiter();
+	const status = new StatusCache(config, db, options.indexHtml ?? readIndexTemplate());
 	const notify = async (incident: IncidentRow): Promise<void> => {
 		if (!mail || !config.smtp) return;
 		const name =
@@ -77,7 +79,7 @@ export function createApplication(
 			})
 		);
 	};
-	const runtime = new MonitorRuntime(config, db, notify, options.request);
+	const runtime = new MonitorRuntime(config, db, notify, options.request, () => status.refresh());
 	app.on("error", () => {
 		console.error("HTTP request failed");
 	});
@@ -98,7 +100,8 @@ export function createApplication(
 			cors({
 				origin: (ctx) => (config.cors.includes(ctx.get("Origin")) ? ctx.get("Origin") : ""),
 				allowMethods: ["GET", "POST"],
-				allowHeaders: ["Authorization", "Content-Type"],
+				allowHeaders: ["Authorization", "Content-Type", "If-None-Match"],
+				exposeHeaders: ["ETag"],
 				maxAge: 600
 			})
 		);
@@ -120,6 +123,16 @@ export function createApplication(
 	const router = new Router();
 	router.get("/healthz", (ctx: Context) => {
 		ctx.body = { status: "ok" };
+	});
+	router.get("/api/status", (ctx: Context) => status.respond(ctx));
+	router.get(["/", "/index.html"], async (ctx: Context, next) => {
+		if (status.html === undefined) {
+			await next();
+			return;
+		}
+		ctx.type = "html";
+		ctx.set("Cache-Control", "no-cache");
+		ctx.body = status.html;
 	});
 	const pushReport = (ctx: Context) => {
 		const bearer = /^Bearer ([^\s]+)$/i.exec(ctx.get("Authorization"))?.[1];
@@ -236,7 +249,7 @@ export function createApplication(
 	});
 	app.use(router.routes()).use(router.allowedMethods());
 	app.use(serve(path.join(__dirname, "../frontend-vite/dist")));
-	return { app, runtime, mail };
+	return { app, runtime, mail, status };
 }
 
 export function startServer(config = readConfig(), options: { port?: number; host?: string } = {}) {
@@ -254,6 +267,7 @@ export function startServer(config = readConfig(), options: { port?: number; hos
 	const cleanup = () => {
 		try {
 			cleanupTables(db);
+			service.status.refresh();
 		} catch {
 			console.error("Database cleanup failed");
 		}

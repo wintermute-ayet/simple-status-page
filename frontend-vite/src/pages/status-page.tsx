@@ -10,6 +10,7 @@ import { StatusAlerts } from "@/components/ui/status-alerts";
 import { Badge } from "@/components/ui/badge";
 import IncidentList, { Incident } from "@/components/ui/incident-list";
 import SvgFavicon from "@/components/svg-favicon";
+import { readSnapshot } from "@/lib/status-snapshot";
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL;
 
@@ -29,6 +30,7 @@ interface OverviewResponse {
 }
 
 function StatusPage() {
+	const [initialSnapshot] = useState(readSnapshot);
 	const location = useLocation();
 	const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
 
@@ -67,17 +69,19 @@ function StatusPage() {
 		}
 	}, [query]);
 
-	const [overviewData, setOverviewData] = useState<OverviewResponse>({
-		groups: [],
-		monitors: [],
-		public: {
-			favicon: "",
-			logo: '<svg width="900" height="140" xmlns="http://www.w3.org/2000/svg"></svg>',
-			companyName: "",
-			refreshInterval: 0,
-			subscriptionsEnabled: false
+	const [overviewData, setOverviewData] = useState<OverviewResponse>(
+		initialSnapshot ?? {
+			groups: [],
+			monitors: [],
+			public: {
+				favicon: "",
+				logo: '<svg width="900" height="140" xmlns="http://www.w3.org/2000/svg"></svg>',
+				companyName: "",
+				refreshInterval: 0,
+				subscriptionsEnabled: false
+			}
 		}
-	});
+	);
 
 	useEffect(() => {
 		let refreshTimerId: NodeJS.Timeout | null = null;
@@ -108,7 +112,9 @@ function StatusPage() {
 					console.error("Error fetching incident data:", error);
 				});
 		};
-		fetchData();
+		if (!initialSnapshot) fetchData();
+		else if (initialSnapshot.public.refreshInterval > 0)
+			refreshTimerId = setTimeout(fetchData, initialSnapshot.public.refreshInterval * 1000);
 
 		// cleanup timer on unmount
 		return () => {
@@ -116,9 +122,9 @@ function StatusPage() {
 				clearTimeout(refreshTimerId);
 			}
 		};
-	}, []);
+	}, [initialSnapshot]);
 
-	const [incidentData, setIncidentData] = useState<Incident[]>([]);
+	const [incidentData, setIncidentData] = useState<Incident[]>(initialSnapshot?.incidents ?? []);
 
 	const numDegradedServices =
 		overviewData.monitors !== undefined
@@ -140,7 +146,7 @@ function StatusPage() {
 			<div className="flex justify-between items-center mb-2">
 				<div className="flex max-w-md pr-4">
 					<img
-						src={`data:image/svg+xml;base64,${btoa(overviewData.public.logo)}`}
+						src={`data:image/svg+xml,${encodeURIComponent(overviewData.public.logo)}`}
 						alt="Logo"
 						className="block mx-auto"
 					/>{" "}
