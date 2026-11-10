@@ -5,6 +5,7 @@ frontend-vite/dist
 .git
 .env*
 **/.env*
+!frontend-vite/.env.production
 data
 coverage
 .vitest

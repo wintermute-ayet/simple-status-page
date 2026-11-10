@@ -1,5 +1,5 @@
-data/config.yaml
-data/*.sqlite
+data/*
+!data/config.example.yml
 node_modules
 dist
 frontend-vite/node_modules
