@@ -5,7 +5,7 @@ import { AxiosHeaders } from "axios";
 import type { Database } from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApplication } from "../src/server";
-import { initializeDatabase } from "../src/database";
+import { createIncident, initializeDatabase } from "../src/database";
 import migrateDatabase from "../src/database-migrations";
 import type { Config } from "../src/config";
 import type { HttpRequest } from "../src/monitors";
@@ -106,6 +106,48 @@ describe("cached status endpoint", () => {
 		])
 			expect(JSON.stringify(data)).not.toContain(privateValue);
 	});
+	it("excludes ungrouped visible monitors and their incidents from JSON and injected HTML", async () => {
+		const ungrouped = rawConfig({
+			id: 3,
+			name: "Ungrouped service",
+			visible: true,
+			uuid: "test-ungrouped-monitor-token"
+		}).monitors[0];
+		const config = makeConfig({}, { monitors: [rawConfig().monitors[0], ungrouped] });
+		const url = await start(config);
+		expect(createIncident(db, 3, "down", "Ungrouped service outage")).toMatchObject({
+			monitor_id: 3,
+			status: "active"
+		});
+		service.status.refresh();
+		const data = await snapshot(url);
+		expect(data.monitors.map((monitor) => monitor.id)).toEqual([1]);
+		expect(data.groups).toEqual([{ name: "Services", monitors: [1] }]);
+		expect(data.incidents).toEqual([]);
+		const response = await fetch(url + "/");
+		expect(response.status).toBe(200);
+		const html = await response.text();
+		expect(injected(html)).toEqual(data);
+		expect(html).not.toContain(ungrouped.name);
+	});
+	it.each([
+		{ label: "omitted", groups: undefined },
+		{ label: "empty", groups: [] }
+	])(
+		"serves an empty snapshot and valid injected HTML when groups are $label",
+		async ({ groups }) => {
+			const url = await start(makeConfig({}, { groups }));
+			const data = await snapshot(url);
+			expect(data.monitors).toEqual([]);
+			expect(data.groups).toEqual([]);
+			expect(data.incidents).toEqual([]);
+			const response = await fetch(url + "/");
+			expect(response.status).toBe(200);
+			const html = await response.text();
+			expect(injected(html)).toEqual(data);
+			expect(html).toContain('<div id="root">');
+		}
+	);
 	it("serves requests from memory with ETag revalidation and quality-aware compression", async () => {
 		const url = await start();
 		const prepare = vi.spyOn(db, "prepare");

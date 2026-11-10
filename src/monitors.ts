@@ -51,6 +51,13 @@ export class MonitorRuntime {
 		saveMonitorState(this.db, next);
 		this.states.set(monitorId, next);
 	}
+	private refreshStatus(): void {
+		try {
+			this.onChange();
+		} catch (error) {
+			console.error("Status snapshot refresh failed", errorDetails(error, this.redact));
+		}
+	}
 	private incidentTracker(
 		monitor: MonitorEntity,
 		state: MonitorState,
@@ -98,7 +105,7 @@ export class MonitorRuntime {
 			return changes;
 		})();
 		this.states.set(monitor.id, state);
-		this.onChange();
+		this.refreshStatus();
 		console.info(`Monitor #${monitor.id} tracking ${status}`);
 		const results = await Promise.allSettled(incidents.map((incident) => this.notify(incident)));
 		for (const result of results)
@@ -124,7 +131,7 @@ export class MonitorRuntime {
 		} else {
 			saveMonitorState(this.db, state);
 			this.states.set(monitor.id, state);
-			this.onChange();
+			this.refreshStatus();
 		}
 	}
 	async checkHTTPMonitor(monitor: MonitorEntity): Promise<void> {
@@ -195,7 +202,7 @@ export class MonitorRuntime {
 			if (status === "down" && state.retries < monitor.retries) {
 				saveMonitorState(this.db, state);
 				this.states.set(monitor.id, state);
-				this.onChange();
+				this.refreshStatus();
 				return;
 			}
 			await this.record(monitor, state, status, elapsedMs);

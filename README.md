@@ -43,7 +43,9 @@ failed response counts toward `retries`: after that many consecutive failed chec
 recorded. Successful checks reset retries. Elapsed milliseconds are stored as the check value.
 Checks do not overlap. The first HTTP check starts with a deterministic offset per monitor id,
 bounded by the smaller of 10% of `checkInterval` and 1000 ms; subsequent checks wait `checkInterval`
-after the previous run finishes. The minimum interval is 1000 ms.
+after the previous run finishes. The minimum interval is 1000 ms. Below the retry threshold, a
+failed HTTP check saves state and resets the recovery streak for degraded incidents, while
+preserving the recovery streak for down incidents.
 
 ### API Monitor
 
@@ -203,11 +205,14 @@ starting the new version.
   replacement to `uuid`, remove the old credential and restart. Never log tokens or Authorization
   headers; omit push URLs from proxy access logs. Comparisons use fixed-size SHA-256 digests and
   constant-time comparison. Logs identify only the monitor and zero-based slot (`uuid` is slot 0).
-- **Subscription salt:** At least 32 characters are required **when SMTP is configured**. Keep the
-  existing secret to preserve links, including when disabling SMTP. Confirmation links now use
-  purpose-bound HMAC-SHA256 and expire after 48 hours; legacy confirmations are no longer accepted.
-  Legacy unsubscribe links remain accepted **with the original salt**. Rotating salt invalidates
-  outstanding confirmations and both new and legacy unsubscribe links; old secrets are not retained.
+- **Subscription salt:** At least 32 characters are required **when SMTP is configured**. Existing
+  SMTP configurations using a shorter salt **now refuse to start**; replace that salt with a new
+  secret of at least 32 characters. Keep a valid existing secret to preserve links, including when
+  disabling SMTP. Confirmation links now use purpose-bound HMAC-SHA256 and expire after 48 hours;
+  legacy confirmations are no longer accepted. Legacy unsubscribe links remain accepted **with the
+  original salt**. Rotating salt invalidates outstanding confirmations and both new and legacy
+  unsubscribe links; old secrets are not retained. Subscribers may need to re-confirm after
+  rotation.
 - **SMTP:** Optional; without it the subscribe button is hidden and `POST /api/subscribe`
   returns 404. Transport `secure` is true only for port 465 (implicit TLS); 587 requires STARTTLS;
   25 sets neither implicit TLS nor required STARTTLS, although the mail library may negotiate
@@ -238,14 +243,6 @@ repeated full rebuild is needed. The one-time rebuild needs maintenance time and
 potentially up to twice the original database size. See SQLite's
 [auto-vacuum](https://www.sqlite.org/pragma.html#pragma_auto_vacuum) and
 [VACUUM](https://www.sqlite.org/lang_vacuum.html) documentation.
-
-### Deployment-directory Divergence
-
-The deployed directory had diverged in both directions from the PR #1 branch. Only the genuine
-`checkApiMonitor()` long-downtime recovery fix was carried back. Host-only regressions in the
-cleanup interval, confirmation-link host derivation and missing group/monitor-id guards were
-intentionally left out; the overhaul retains the corrected interval, configured public base URL and
-validated inputs.
 
 ## Optional: Setting Up Nginx Reverse Proxy with HTTPS (Debian/Ubuntu)
 

@@ -83,7 +83,10 @@ export class StatusCache {
 	}
 	refresh(): void {
 		const now = new Date();
-		const monitors = this.config.monitors.filter((monitor) => monitor.visible);
+		const assigned = new Set(this.config.groups.flatMap((group) => group.monitors));
+		const monitors = this.config.monitors.filter(
+			(monitor) => monitor.visible && assigned.has(monitor.id)
+		);
 		const ids = new Set(monitors.map((monitor) => monitor.id));
 		const incidents = getIncidents(this.db, 90)
 			.filter((incident) => ids.has(incident.monitor_id))

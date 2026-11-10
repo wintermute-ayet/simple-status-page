@@ -1,7 +1,7 @@
 import { AxiosHeaders, type AxiosResponse } from "axios";
 import type { Database } from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MonitorRuntime, type HttpRequest } from "../src/monitors";
+import { MonitorRuntime, type HttpRequest, type NotifyIncident } from "../src/monitors";
 import { initializeDatabase, type MonitorState } from "../src/database";
 import migrateDatabase from "../src/database-migrations";
 import * as database from "../src/database";
@@ -205,6 +205,32 @@ describe("HTTP monitors", () => {
 			regexp: "healthy",
 			...monitor
 		});
+	it("persists checks and notifies incidents when snapshot refresh throws", async () => {
+		const config = httpConfig();
+		const notify = vi.fn<NotifyIncident>().mockResolvedValue(undefined);
+		const request = vi.fn<HttpRequest>().mockResolvedValue(response("unavailable", 503));
+		const refresh = vi.fn(() => {
+			throw new Error(`Snapshot unavailable: ${testToken}`);
+		});
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		runtime = new MonitorRuntime(config, db, notify, request, refresh);
+		await expect(runtime.checkHTTPMonitor(config.monitors[0])).resolves.toBeUndefined();
+		expect(checks()).toEqual([{ status: "down", val: 0 }]);
+		expect(state()).toMatchObject({ last_status: "down", down_count: 1, retries: 1 });
+		expect(db.prepare("SELECT status FROM incidents").all()).toEqual([{ status: "active" }]);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ monitor_id: 1, type: "down", status: "active" })
+		);
+		expect(refresh).toHaveBeenCalledTimes(1);
+		expect(logged).toHaveBeenCalledWith(
+			"Status snapshot refresh failed",
+			expect.objectContaining({
+				message: "Snapshot unavailable: [REDACTED]",
+				stack: expect.stringContaining("[REDACTED]")
+			})
+		);
+		expect(JSON.stringify(logged.mock.calls)).not.toContain(testToken);
+	});
 	it("stores the measured elapsed time and uses it for degradation", async () => {
 		const config = httpConfig();
 		const request = vi.fn<HttpRequest>().mockImplementation(() => {
