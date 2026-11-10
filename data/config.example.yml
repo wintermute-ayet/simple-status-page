@@ -1,74 +1,100 @@
-public:
+# Copy to data/config.yaml (or data/config.yml), then replace the example values.
+# CONFIG_PATH selects another file. Unknown keys are rejected at startup.
+# All credentials below are deliberately fake. Replace them before deployment.
+
+public: # exposed by the public API; never put credentials in this block
+  # Optional SVG strings, default "". They are embedded as data images.
   favicon:
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em"
-    font-size="90">🪲</text></svg>'
+    font-size="90">✓</text></svg>'
   logo:
-    '<svg xmlns="http://www.w3.org/2000/svg" width="920" height="142" viewBox="0 0 920 142"
-    version="1.1"></svg>'
-  companyName: "Example Company"
-  refreshInterval: 900
-  basedomain: "http://localhost:3000"
+    '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="44" viewBox="0 0 240 44"><text
+    x="0" y="34" font-size="34" fill="#3c6bc0">Example</text></svg>'
+  companyName: "Example Company" # page title/footer and mail subject; default "Status"
+  refreshInterval: 900 # legacy API setting in seconds; bundled frontend polls every 45 s
+  basedomain: "https://example.com" # external HTTP(S) base URL for mail links; no credentials
 
-salt: "replace-with-at-least-32-random-characters" # signs subscription links; >= 32 characters with SMTP
+# Private signing secret, optional without SMTP; >= 32 characters required with SMTP.
+# Keep stable to preserve confirmation and unsubscribe links, including legacy unsubscribes.
+# Replacing this example secret invalidates links made with it; use a private random value.
+salt: "example-only-replace-with-at-least-32-random-characters"
 
-dailyThresholds: # fractions of known checks; no-data checks and days are excluded
-  down: 0.001
-  degraded: 0.005
+dailyThresholds: # optional; fractions of known checks from 0 to 1; unknown/no-data excluded
+  down: 0.001 # default; a day's down fraction must exceed this threshold to show down
+  degraded: 0.005 # default; applied after down; degraded checks still count toward uptime
 
-database:
-  path: "data/database.sqlite" # will be created on first startup
+database: # required SQLite storage settings
+  path: "data/database.sqlite" # required; parent directory must exist and be writable
 
-smtp: # optional; omit this block to disable subscriptions and hide the button
-  host: "smtp.example.com"
-  from: "status@example.com"
-  port: 25
-  username: "smtp_user"
-  password: "smtp_password"
+# Optional SMTP. Uncomment and replace placeholders to enable subscription requests/mail.
+# Omitted SMTP hides the subscribe button; keep the old salt for existing unsubscribe links.
+# Transport secure is derived from port: true only for 465; 587 requires STARTTLS;
+# 25 sets neither implicit TLS nor required STARTTLS (opportunistic STARTTLS may be used).
+# smtp.secure and smtp.to are NOT config keys. "to" comes from confirmed subscribers.
+# smtp:
+#   host: "example.com" # required mail-server hostname
+#   from: "<sender-address>" # required sender; replace with a valid single mail address
+#   port: 587 # optional, default 587; typically 465, 587 or 25
+#   username: "<smtp-username>" # optional; supply username/password together, or both ""
+#   password: "<smtp-password>" # private; never commit a real password
 
-groups: # list of groups shown on the status page
-  - name: "Endpoints"
-    monitors: # list of monitor ids
-      - 1
+# These are top-level keys; there is no "app" block. proxy controls Koa's app.proxy.
+proxy: false # default; true only behind a trusted proxy that REPLACES forwarded headers
+cors: [] # default off; optional exact browser origins, e.g. ["https://example.com"]
+
+groups: # optional list; the frontend uses these groups, not the legacy monitor.group key
+  - name: "Endpoints" # required group label
+    monitors: [1] # existing monitor ids; hidden monitors are omitted from the snapshot
   - name: "Infrastructure"
-    monitors:
-      - 2
+    monitors: [2]
 
-monitors: # list of monitors
-  - name: "Website"
-    id: 1 # must be unique
-    uuid: "not-required" # optional for http monitors
-    description: null # optional
-    visible: true # a monitor that is not visible will not be shown on the status page and does not create / resolve incidents
-    type: "http" # http or api
-    url: "https://example.com" # http endpoint to check
-    regexp: ".*nginx.*" # regexp to check for in response body
-    validStatusCodes: # optional, default: 200
-      - 200
-      - 404
-    checkInterval: 60000 # in ms, minimum 1000
-    retries: 3 # number of retries before tracking monitor_check "down"
-    timeoutDownMs: 5000 # in ms
-    timeoutDegradedMs: 1000 # in ms
-    incidents: # optional
-      down: # optional
-        createAfter: 2 # number of "down" checks before creating incident
-        resolveAfter: 2 # number of "up" or "degraded" checks before resolving incident
-      degraded: # optional
-        createAfter: 5 # number of "degraded" checks before creating incident
-        resolveAfter: 5 # consecutive "up" checks only; degraded/down/unknown resets this streak
+monitors: # optional list, default []; each monitor requires a stable id, name and type
+  - id: 1 # required positive integer, unique across all monitors; keep stable on upgrades
+    name: "Website" # required display name
+    description: "Public website endpoint" # optional text; default "" (null also becomes "")
+    visible: true # default; false hides it and disables incident create/resolve, checks still run
+    type: "http" # required: http or api
+    uuid: "" # optional/unused for HTTP; the primary token for API monitors is named uuid
+    group: "" # accepted legacy string, default ""; no effect, use top-level groups instead
+    uptimeWording: "uptime" # optional label only; does not change the uptime calculation
+    checkInterval: 60000 # ms after each run, minimum 1000, default 60000; start jitter <= 1 s
+    retries: 3 # default; consecutive failed HTTP checks before recording down
+    url: "https://example.com" # required HTTP(S) target for HTTP monitors; no URL credentials
+    regexp: "" # optional response-text regexp, default disabled; invalid patterns reject config
+    validStatusCodes: [200] # optional, default [200]; non-empty list of codes from 100 to 599
+    timeoutDownMs: 5000 # positive ms request deadline, default 5000
+    timeoutDegradedMs: 1000 # positive ms; successful requests exceeding this are degraded
+    # timeoutDegradationMs: 1000 # deprecated alias; warns; timeoutDegradedMs takes precedence
+    # timeoutDegradedMs must be <= timeoutDownMs; timeoutDegradation is not an accepted key.
+    incidents: # optional; omit to disable automatic incidents for this monitor
+      down: # optional; both counters default to 1, either 0 disables this incident type
+        createAfter: 2 # consecutive recorded down checks before creating an outage incident
+        resolveAfter: 2 # consecutive up OR degraded checks before resolving the outage
+        message: | # optional plain text; default is an automatic outage message
+          Some requests to this service are failing.
+          We are investigating.
+      degraded: # optional; shares the createAfter/resolveAfter/message options
+        createAfter: 5 # consecutive recorded degraded checks before creating an incident
+        resolveAfter: 5 # consecutive up ONLY; degraded/down/unknown reset this streak
+        message: "Response times are elevated." # optional plain text, safely escaped in the UI
 
-  - name: "Backend"
-    id: 2
-    uuid: "example-push-token-change-me" # required for api monitors, unique and at least 16 characters
-    # GET /api/monitor/<token>?status=up|down|degraded&value=123
-    # the numeric value parameter is optional and will be stored in the database for each check, but currently not used
-    description: null # optional
-    visible: true # a monitor that is not visible will not be shown on the status page and does not create / resolve incidents
-    type: "api" # http or api
-    checkInterval: 120000 # an api monitor will increment its retries if last call to the endpoint was more than checkInterval ms ago
-    retries: 2 # number of retries before tracking monitor_check "down"
-    onMissing: down # down (default) or unknown when reports stop arriving
-    uptimeWording: "availability" # optional, default: 'uptime'
+  - id: 2
+    name: "Backend"
+    description: "Health reported by an external process"
+    visible: true
+    type: "api"
+    uuid: "example-only-primary-token-change-me" # required primary token, NOT a "token" key
+    tokens: # optional rotation tokens, default []; all entries plus uuid are active
+      - "example-only-rotation-token-change-me" # all API tokens unique, >= 16 characters
+    # Prefer POST /api/monitor with Authorization: Bearer <token> and JSON status/value.
+    # Legacy GET /api/monitor/<token>?status=up&value=123 remains supported.
+    # status: up, degraded or down; value: optional finite number (default 0), stored not graphed.
+    # Add a token, restart, switch reporters, then promote to uuid/remove old token and restart.
+    # Never log token values or Authorization headers; callback logs identify the slot only.
+    checkInterval: 120000 # ms between API checks, minimum 1000; freshness = retries * interval
+    retries: 2 # after the freshness window, consecutive missing checks before onMissing applies
+    onMissing: down # optional, default down; unknown instead records no data on missing reports
+    uptimeWording: "availability" # optional, default "uptime"
     incidents:
       down:
         createAfter: 3

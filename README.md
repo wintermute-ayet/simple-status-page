@@ -12,15 +12,15 @@ configuration, and can be deployed with Docker. The frontend uses native HTML co
   updates.
 - **Docker Deployment:** Easy setup with Docker and Docker Compose.
 - **Customizable Configuration:** Managed through a single YAML file.
-- **Basic Database Migration:** A very simple database migration class that creates / updates the
-  SQLite schema if required.
-- **Planned Features:**
-  - Ping monitor type.
-  - Additional notification providers/integrations.
-  - Interface for manual incidents and scheduled maintenance.
-  - Optional graphing for metrics such as latency or load.
+- **Automatic Database Migrations:** Persisted monitor state and daily uptime history in SQLite.
+- **Snapshot Frontend:** Initial status without an API call, conditional polling and accessible
+  history.
+
+Unimplemented features are listed in the [roadmap](#roadmap).
 
 ## Frontend Screenshots
+
+These reference screenshots predate the frontend overhaul:
 
 | ![Desktop View](img/desktop.png) | ![Mobile View](img/mobile.png) |
 | :------------------------------: | :----------------------------: |
@@ -33,96 +33,85 @@ has its unique way of monitoring and reporting the status of your services.
 
 ### HTTP Monitor
 
-- **Functionality**: The `http` monitor type periodically makes HTTP requests to a specified
-  endpoint and checks if the response (optional) and status codes are as expected.
-- **Retries**: If a check fails (e.g., incorrect response or status code), the system will retry
-  (after waiting for `checkInterval`) the check based on the configured `retries` number before
-  marking the service as down.
-- **Configuration**: Set the endpoint URL, expected response (using a regular expression), and valid
-  status codes in the configuration file.
+HTTP monitors check the configured URL and allowed status codes. An optional regular expression
+checks the response text; it is compiled once at startup. Each request has a timeout, a 1 MB body
+cap, a five-redirect limit and its own User-Agent. When a regexp is configured, content types must
+be text, JSON, XML or JavaScript; a missing content type is treated as text.
+
+A successful response taking more than `timeoutDegradedMs` milliseconds is degraded. A rejected or
+failed response counts toward `retries`: after that many consecutive failed checks, down is
+recorded. Successful checks reset retries. Elapsed milliseconds are stored as the check value.
+Checks do not overlap. The first HTTP check starts with a deterministic offset per monitor id,
+bounded by the smaller of 10% of `checkInterval` and 1000 ms; subsequent checks wait `checkInterval`
+after the previous run finishes. The minimum interval is 1000 ms.
 
 ### API Monitor
 
-- **Functionality**: Unlike the `http` monitor, the `api` monitor type is designed to be called
-  externally. It allows external systems to report the status of a service.
-- **Retries**: For `api` monitors, the retry count increments if the time since the last call
-  exceeds the `checkInterval`. If it surpasses the configured `retries` count without a status
-  update, the service is considered down.
-- **Endpoint Call**: To update the status of an `api` monitor, make an HTTP request to
-  `http://[basedomain]/api/monitor/[uuid]?status=[status]&value=[value]`.
-  - `uuid`: Unique identifier for the monitor, keep this private.
-  - `status`: The status of the monitor (`up`, `down`, or `degraded`).
-  - `value`: Optional numeric value providing additional data (currently not used but stored in the
-    database).
+API monitors receive external reports through the [push API](#push-monitors). Accepted reports are
+persisted immediately; the public snapshot reflects them at the monitor's scheduled check. A report
+is fresh for `retries * checkInterval` milliseconds. Once it is stale, the missing-report retry
+counter advances on each check. At the retry threshold, `onMissing: down` records down, while
+`onMissing: unknown` records no data. A fresh report resets retries and restores its reported
+status, including after a long outage. A monitor that has never reported also follows this
+missing-data rule.
+
+The optional finite numeric `value` defaults to zero. It is stored with checks for future metrics
+use and is not graphed by the current frontend.
 
 ### Monitor Status and Incidents
 
-- Both monitor types support optional incident tracking. Incidents can be automatically created and
-  resolved based on the monitor's status over time, as defined in the `incidents` configuration.
-- `createAfter`: Number of consecutive failure checks required before creating an incident.
-- `resolveAfter`: Consecutive `up` checks for degraded incidents; consecutive `up` or `degraded`
-  checks for down incidents.
+Both types support optional incident rules for `down` and `degraded`:
+
+- `createAfter` counts consecutive recorded checks of that incident type.
+- For down incidents, `resolveAfter` counts consecutive **up or degraded** checks.
+- For degraded incidents, `resolveAfter` counts consecutive **up** checks only. Degraded, down and
+  unknown reset this healthy streak; down and unknown also reset the outage recovery streak.
+- Both counters must be positive to enable a rule; setting either to zero disables that incident
+  type. A failure meeting `createAfter` takes precedence and keeps the incident active.
+
+A recovered outage can leave a separate performance incident active. `visible: false` hides a
+monitor from the public snapshot and prevents automatic incident creation/resolution for it; its
+checks still run. Incident messages are plain text, with preserved line breaks and legacy `<br>`
+separators rendered safely. These rules create database incidents; mail notifications require SMTP
+and confirmed subscribers.
 
 ## Configuration Guide
 
-The application is configured through the `data/config.yaml` file. Below is a detailed explanation
-of the configuration parameters:
+Start with [data/config.example.yml](data/config.example.yml), which documents every accepted key
+and includes HTTP and API monitors. Copy it to `data/config.yaml` or `data/config.yml`, then replace
+the example salt, tokens, URLs and any SMTP placeholders before deployment. SMTP is commented out in
+the example so it sends no mail by default.
 
-- **public**:
+Config lookup is `CONFIG_PATH`, then `data/config.yaml` if present, otherwise `data/config.yml`.
+Relative paths resolve from the process working directory. Startup validates YAML before opening
+SQLite: unknown keys, duplicate ids or API tokens, tokens shorter than 16 characters, invalid
+regexps and groups referencing missing monitors are errors.
 
-  - `favicon`: Custom favicon in SVG format.
-  - `logo`: Custom logo in SVG format.
-  - `companyName`: The name displayed on the status page.
-  - `refreshInterval`: Legacy refresh setting retained for API compatibility. The frontend polls the
-    status snapshot every 45 seconds while visible.
-  - `basedomain`: The base URL where the application is hosted.
+| Block/key                | Meaning                                                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `public`                 | SVG favicon/logo, company name, public base URL and legacy refresh setting. This block is public; put no credentials here.                                         |
+| `public.basedomain`      | Absolute HTTP(S) base URL used in mail links; independent of request Host headers. Use the external HTTPS URL behind nginx.                                        |
+| `public.refreshInterval` | Legacy value in seconds, retained for API compatibility. The bundled frontend polls every 45 seconds while visible.                                                |
+| `salt`                   | Private subscription-signing secret; see [upgrade notes](#upgrade-notes).                                                                                          |
+| `dailyThresholds`        | `down` and `degraded` fractions from 0 to 1, defaults `0.001` and `0.005`. A day's failure fraction must exceed its threshold. Down takes precedence.              |
+| `database.path`          | SQLite file path; its directory must exist and be writable, including for WAL/SHM files.                                                                           |
+| `smtp`                   | Optional mail host, sender, port and paired username/password. Omit to hide subscriptions and disable new subscription requests.                                   |
+| `proxy`                  | Top-level boolean, default `false`; controls Koa's `app.proxy`. Enable only behind a trusted proxy that replaces forwarded headers.                                |
+| `cors`                   | Top-level list of allowed HTTP(S) origins, default `[]` (CORS off). No wildcards, paths or queries. For example, `["https://example.com"]`.                        |
+| `groups`                 | Named lists of existing monitor ids, defining the public page's grouping.                                                                                          |
+| `monitors`               | Unique id/name, type, visibility, description, uptime label, intervals, retries, HTTP options or API credentials/missing-data policy, and optional incident rules. |
 
-- **salt**:
-
-  - A secret used to sign subscription links; at least 32 characters when SMTP is configured.
-
-- **database**:
-
-  - `path`: The file path for the SQLite database.
-
-- **smtp**:
-
-  - `host`: SMTP server host.
-  - `from`: Email address used for sending notifications.
-  - `port`: SMTP server port.
-  - `username`: SMTP server username.
-  - `password`: SMTP server password.
-
-- **groups**: (array of groups)
-
-  - Each group has:
-    - `name`: Name of the group.
-    - `monitors`: Array of monitor IDs included in the group.
-
-- **monitors**: (array of monitors)
-  - Each monitor has:
-    - `name`: Name of the monitor.
-    - `id`: Unique identifier for the monitor.
-    - `uuid`: A unique identifier for this monitor.
-    - `description`: Optional description of the monitor.
-    - `visible`: Determines if the monitor is visible on the status page.
-    - `type`: Type of monitor (`http` or `api`).
-    - `url`: (for HTTP monitors) The URL to check.
-    - `regexp`: (optional, for HTTP monitors) Regular expression to match in the response body.
-    - `validStatusCodes`: (optional, for HTTP monitors) Array of HTTP status codes considered valid.
-    - `checkInterval`: Time interval (in milliseconds) for performing checks, minimum 1000.
-    - `retries`: Number of retries before a check is considered failed.
-    - `timeoutDownMs`: HTTP request timeout (in milliseconds) for a down status.
-    - `timeoutDegradedMs`: HTTP request duration (in milliseconds) for a degraded status.
-    - `incidents`:
-      - `down`: Settings for down status incidents.
-      - `degraded`: Settings for degraded status incidents.
+SMTP accepts only `host`, `from`, `port`, `username` and `password`. Supply username/password
+together or leave both empty. Transport `secure` is derived from the port, and recipients (`to`)
+come from subscriptions; `smtp.secure` and `smtp.to` are not YAML options. The `proxy` and `cors`
+keys are at the root, without an `app` block.
 
 ## Building and Running the Project
 
 ### Prerequisites
 
-- Node.js 20 or newer (Node 24 recommended and used by the container)
+- Node.js 24 for the documented build and deployment workflow. CI and the pinned container use 24;
+  `package.json` declares an engine floor of `>=20`.
 - npm
 
 ### Installation
@@ -130,7 +119,7 @@ of the configuration parameters:
 1. Clone the repository.
 2. Install dependencies for backend and frontend:
    ```sh
-   npm run dependencies
+   npm run deps
    ```
 
 ### Building the Application
@@ -151,19 +140,119 @@ npm run start
 
 ## Running with Docker Compose
 
-1. Ensure Docker and Docker Compose are installed on your system.
-2. Prepare your `data/config.yaml` file and make sure the directory writable for the SQLite database
-3. Run the following command in the project's root directory:
+1. Install Docker with the Compose plugin, then prepare the configuration:
+
    ```sh
-   docker-compose up
+   cp data/config.example.yml data/config.yaml
    ```
-   _The container will mount `data/` locally to read the `config.yaml` and create / store the
-   database._
+
+   Edit it for your services. Grant the image's non-root `node` user read access to the private
+   config and write access to `data/` for SQLite and its sidecar files. Match the bind mount's
+   ownership to that user; keep credentials and database backups private.
+
+2. Run the [preflight checks](#preflight-checks) before deploying, then start the service:
+
+   ```sh
+   docker compose up -d --build
+   curl -fsS http://127.0.0.1:3000/healthz
+   ```
+
+Compose publishes only `127.0.0.1:3000:3000`; nginx exposes the public endpoint. It uses
+`restart: unless-stopped`, `init: true` and `stop_grace_period: 15s`. The server's graceful shutdown
+deadline is 10 seconds. The root filesystem is read-only, `./data` is the writable persistent mount,
+and `/tmp` is a 16 MB tmpfs with `noexec,nosuid`; `SQLITE_TMPDIR` keeps SQLite temporary files on
+the data mount. All Linux capabilities are dropped, new privileges are disabled, memory is limited
+to 512 MB, and JSON logs rotate at 10 MB with three files.
+
+The multi-stage image pins `node:24-slim` by digest, keeps production dependencies only, runs
+`node dist/server.js` as `node`, and checks `/healthz`. For a direct Node deployment, an equivalent
+loopback listener can be selected with `HOST=127.0.0.1 PORT=3000 npm start`. In containers, the
+default internal listener accepts connections on all interfaces; the Compose port mapping controls
+host exposure. `HOST`/`PORT` override the listener, and `PORT` must be an integer from 1 to 65535.
+
+## Upgrade Notes
+
+Stop the previous service and take a consistent SQLite backup and a private copy of its config
+before the first upgraded start. Use the configured `database.path`; for the example path, with the
+SQLite CLI installed on the host:
+
+```sh
+docker compose stop
+sqlite3 data/database.sqlite '.backup data/database.pre-overhaul.sqlite'
+```
+
+Keep the old image and backup for rollback; restore the backup when rolling back a schema upgrade.
+Validate the updated config and allow time and disk space for the initial migration/backfill before
+starting the new version.
+
+- **Timeout alias:** `timeoutDegradationMs` is accepted with a deprecation warning. Rename it to
+  **`timeoutDegradedMs`**, the canonical key. Both are milliseconds: a successful HTTP response
+  exceeding this duration is degraded (default 1000 ms); `timeoutDownMs` is the request deadline
+  (default 5000 ms). The degraded threshold must not exceed the down timeout. The canonical key wins
+  if both are set. `timeoutDegradation` is not an accepted key.
+- **State and history:** Migration 3 creates `monitor_state` for last reports, retry counts and
+  incident streaks, loads the latest stored checks, and permits `unknown` in raw history. Migration
+  4 creates `monitor_daily` and performs a one-time backfill of the last 91 UTC dates from raw
+  checks. Migrations run at startup and record completion transactionally; repeated starts do not
+  double-count. The backfill replaces counts on conflict, so it is idempotent. New checks update raw
+  history, daily counters and runtime state together. Keep monitor ids stable across upgrades.
+- **Token rotation:** The primary API credential is **`uuid`**, alongside optional `tokens: []`;
+  there is no singular `token` config key. All entries authenticate the same monitor and must be
+  globally unique, at least 16 characters long. Add a new random token to `tokens`, restart, switch
+  reporting clients, and check monitor ids/token slots to confirm the handover. Then promote the
+  replacement to `uuid`, remove the old credential and restart. Never log tokens or Authorization
+  headers; omit push URLs from proxy access logs. Comparisons use fixed-size SHA-256 digests and
+  constant-time comparison. Logs identify only the monitor and zero-based slot (`uuid` is slot 0).
+- **Subscription salt:** At least 32 characters are required **when SMTP is configured**. Keep the
+  existing secret to preserve links, including when disabling SMTP. Confirmation links now use
+  purpose-bound HMAC-SHA256 and expire after 48 hours; legacy confirmations are no longer accepted.
+  Legacy unsubscribe links remain accepted **with the original salt**. Rotating salt invalidates
+  outstanding confirmations and both new and legacy unsubscribe links; old secrets are not retained.
+- **SMTP:** Optional; without it the subscribe button is hidden and `POST /api/subscribe`
+  returns 404. Transport `secure` is true only for port 465 (implicit TLS); 587 requires STARTTLS;
+  25 sets neither implicit TLS nor required STARTTLS, although the mail library may negotiate
+  STARTTLS if offered. Configure the port, without adding a `smtp.secure` key.
+- **Runtime and network:** Use Node 24 for this deployment workflow; the package engine constraint
+  remains `>=20`. Preserve Compose's 15-second stop grace period. Both `.yaml` and `.yml` configs
+  are supported with the lookup order above. Reapply any `HOST`/`PORT` overrides. Keep top-level
+  `proxy: false` unless requests pass through a trusted reverse proxy; CORS remains off with
+  `cors: []` unless explicit browser origins need access.
+
+### Enabling Incremental Space Reclamation
+
+New SQLite files enable incremental auto-vacuum. Existing databases created with `auto_vacuum=NONE`
+still reuse freed pages internally but need a one-time rebuild to let cleanup shrink the file.
+Startup does not run a full `VACUUM`. During maintenance, with the service stopped and a backup
+available, inspect and change the database using one connection:
+
+```sh
+sqlite3 data/database.sqlite 'PRAGMA auto_vacuum;'
+# If the result is 0 (NONE), enable incremental mode and rebuild once:
+sqlite3 data/database.sqlite \
+  'PRAGMA auto_vacuum=INCREMENTAL; VACUUM; PRAGMA auto_vacuum;'
+```
+
+The final result should be `2` (INCREMENTAL). `VACUUM` alone can reclaim space once, but does not
+change a `NONE` database to incremental mode. Subsequent cleanup uses bounded incremental vacuum; no
+repeated full rebuild is needed. The one-time rebuild needs maintenance time and free disk space,
+potentially up to twice the original database size. See SQLite's
+[auto-vacuum](https://www.sqlite.org/pragma.html#pragma_auto_vacuum) and
+[VACUUM](https://www.sqlite.org/lang_vacuum.html) documentation.
+
+### Deployment-directory Divergence
+
+The deployed directory had diverged in both directions from the PR #1 branch. Only the genuine
+`checkApiMonitor()` long-downtime recovery fix was carried back. Host-only regressions in the
+cleanup interval, confirmation-link host derivation and missing group/monitor-id guards were
+intentionally left out; the overhaul retains the corrected interval, configured public base URL and
+validated inputs.
 
 ## Optional: Setting Up Nginx Reverse Proxy with HTTPS (Debian/Ubuntu)
 
-**Note:** _This is a very basic example of how to configure nginx with letsencrypt as reverse
-proxy._
+This single-proxy example assumes nginx connects to the service through the loopback Compose
+binding. Set top-level `proxy: true` in YAML so Koa uses the forwarded client IP and scheme, and set
+`public.basedomain: "https://example.com"` for subscription links. Keep direct backend access
+restricted to trusted local callers.
 
 ### Step 1: Install Nginx and Certbot
 
@@ -198,18 +287,37 @@ Create a new Nginx server block configuration:
    ```nginx
    server {
        listen 80;
-       server_name example.com www.example.com; # Replace with your domain
+       server_name example.com; # Replace with your domain
+       server_tokens off;
+
+       proxy_http_version 1.1;
+       proxy_set_header Host $host;
+       proxy_set_header X-Forwarded-For $remote_addr;
+       proxy_set_header X-Forwarded-Proto $scheme;
+       proxy_set_header Connection "";
+       proxy_connect_timeout 5s;
+       proxy_send_timeout 15s;
+       proxy_read_timeout 60s;
+
+       # Push URLs contain tokens; subscription links contain addresses/signatures.
+       location ~* ^/api/(monitor|confirm-subscription|unsubscribe)(/|$) {
+           access_log off;
+           proxy_pass http://127.0.0.1:3000;
+       }
 
        location / {
-           proxy_pass http://localhost:3000; # Assuming your app runs on port 3000
-           proxy_http_version 1.1;
-           proxy_set_header Upgrade $http_upgrade;
-           proxy_set_header Connection 'upgrade';
-           proxy_set_header Host $host;
-           proxy_cache_bypass $http_upgrade;
+           proxy_pass http://127.0.0.1:3000;
        }
    }
    ```
+
+   `X-Forwarded-For $remote_addr` replaces any incoming forwarded chain with nginx's actual client
+   address. With Koa trusting this one proxy (`maxIpsCount=1`), clients cannot spoof the
+   subscription rate limiter's IP by supplying their own header. Keep this replacement when adapting
+   the example; `$proxy_add_x_forwarded_for` appends the incoming chain. The nginx
+   [proxy header reference](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)
+   describes the header variables. If other proxies precede nginx, establish that separate trust
+   boundary before enabling forwarded-header trust.
 
 4. Enable the configuration by linking it to the `sites-enabled` directory:
    ```sh
@@ -229,81 +337,49 @@ Create a new Nginx server block configuration:
 1. Run Certbot to get an SSL certificate and configure Nginx to use HTTPS:
 
    ```sh
-   sudo certbot --nginx -d example.com -d www.example.com
+   sudo certbot --nginx -d example.com
    ```
 
-   Replace `example.com` and `www.example.com` with your domain name.
+   Replace `example.com` with your domain name.
 
 2. Follow the prompts to configure your certificate. Certbot will automatically modify your Nginx
    configuration to serve your site over HTTPS.
 
 ### Step 4: Automatic Certificate Renewal
 
-Certbot sets up a cron job or systemd timer for renewing certificates that are near expiration. You
-can test the automatic renewal process with:
+Ensure Certbot's cron job or systemd timer is enabled to renew certificates near expiration. Test
+the renewal process with:
 
 ```sh
 sudo certbot renew --dry-run
 ```
 
----
+## API Reference
 
-With these steps, your Nginx server will now act as a reverse proxy to your Docker container and
-serve your application securely using HTTPS. Remember to replace `example.com` with your actual
-domain and adjust the port number (`3000`) if your application is running on a different port.
+Read endpoints are public. The snapshot is suitable for the bundled frontend and external clients;
+it excludes monitor URLs/tokens, SMTP settings and salt. External browser consumers need their
+origin in `cors`; server-to-server clients do not need CORS.
 
-## License
+| Endpoint                   | Response/contract                                                                                                                                               |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/status`          | Public config (including `subscriptionsEnabled`), groups, visible monitors with current status/uptime/91-day history, active/recent incidents, and `updatedAt`. |
+| `GET /healthz`             | 200 with `{"status":"ok"}` while the HTTP service responds; this is process liveness, not a check that all monitored services are up.                           |
+| `GET /api/overview`        | Retained legacy overview response.                                                                                                                              |
+| `GET /api/monitor?id=<id>` | Retained legacy daily history. Invalid ids return 400; unknown/hidden monitors return 404.                                                                      |
+| `GET /api/incidents`       | Retained legacy incident list.                                                                                                                                  |
 
-This project is released under the MIT License.
+### Snapshot Caching
 
-## Monitor correctness and configuration
+`/api/status` is served from an in-memory snapshot with prebuilt JSON, gzip and Brotli bodies. It
+runs no SQLite query or serialization/compression per request. Content encoding is negotiated from
+`Accept-Encoding` (`gzip`/`br`), with a weak ETag shared across encodings. Send that ETag in
+`If-None-Match` to get 304 with no body when unchanged. Responses include `Vary: Accept-Encoding`
+and `Cache-Control: public, max-age=15, stale-while-revalidate=60`. Other API routes use `no-store`.
 
-Startup validates the YAML before opening the database. `CONFIG_PATH` overrides the default lookup
-of `data/config.yaml`, then `data/config.yml`. Unknown keys, duplicate monitor ids or API tokens,
-tokens shorter than 16 characters, invalid regular expressions and missing group members are
-configuration errors. `timeoutDegradationMs` remains a deprecated alias for `timeoutDegradedMs` with
-a startup warning; the canonical key takes precedence when both are present.
+### Push Monitors
 
-SMTP is optional. Without its block, subscriptions are disabled and the subscribe button is hidden.
-Port 465 uses implicit TLS; port 587 uses STARTTLS. Delivery is queued (at most 100 queued
-messages), time limited to 10 seconds per attempt and retried at most twice, with 250 ms then 500 ms
-backoff. Closing the queue cancels pending retry delays. A delivery failure returns a controlled
-error and does not terminate the service. Pending subscriptions can request confirmation again.
-Shutdown drains or cancels outstanding work before closing SQLite.
-
-For down incidents, `resolveAfter` counts consecutive checks that are **up or degraded**. For
-degraded incidents, it counts consecutive **up** checks only, using a separate persisted
-`healthy_count`. Degraded/down/unknown checks reset this healthy streak; down/unknown checks also
-reset the outage recovery streak. A failure that still meets `createAfter` takes precedence and
-keeps that incident active. Degraded service can resolve an outage while retaining a performance
-incident. Incident counters, retry counters and the last pushed report survive restarts; each
-recorded check and its runtime state are committed together. Migration 3 adds `monitor_state` and
-extends the raw check table to accept `unknown`, preserving existing checks and indexes.
-
-HTTP monitors run their first check with a deterministic offset per id, bounded by the smaller of
-10% of `checkInterval` and 1000 ms. Intervals must be at least 1000 ms. Checks never overlap, time
-out individually, follow at most five redirects and accept at most 1 MB of response text. When a
-regular expression is configured, content types must be text, JSON, XML or JavaScript; a missing
-content type is treated as text. The regular expression is compiled once at startup. API monitors
-keep the existing GET callback and default to `onMissing: down`; `onMissing: unknown` records no
-data instead. Missing `value` defaults to zero; supplied values must be finite numbers.
-
-`dailyThresholds.down` and `dailyThresholds.degraded` are fractions of known checks used for each
-calendar day's summary (defaults `0.001` and `0.005`). Unknown checks and days without data are
-excluded from uptime. No-data days have null uptime, and an entirely empty history displays "No
-data" instead of zero percent.
-
-HTTP failures log their error code, response status and diagnostic message; fatal errors and server
-failures include stacks. Configured credentials, Bearer values and push URL tokens are redacted.
-Fatal shutdown arms an unref'd 15-second exit deadline for lingering handles. Normal shutdown has a
-10-second server deadline, and Compose allows 15 seconds before stopping it.
-
-## HTTP and subscription security
-
-API monitor `uuid` and optional `tokens: []` entries all authenticate the same monitor, allowing
-rotation without an interruption. Tokens must be unique and at least 16 characters long. The
-existing `GET /api/monitor/<token>?status=up&value=1` callback remains supported. POST accepts JSON
-or the same query parameters and requires `Authorization: Bearer <token>`:
+Prefer HTTPS POST with a Bearer token. The legacy GET contract remains supported for existing
+reporters; its credential is in the URL path and its report fields are query parameters.
 
 ```sh
 curl --request POST https://example.com/api/monitor \
@@ -312,35 +388,62 @@ curl --request POST https://example.com/api/monitor \
   --data '{"status":"up","value":1}'
 ```
 
-`POST /api/monitor/<token>` also works; the path and Bearer tokens must belong to the same monitor.
-Token comparisons use equal-length SHA-256 digests and constant-time comparison. The application
-logs monitor ids and zero-based token slots only (`uuid` is slot 0, rotation tokens follow).
-Configure reverse proxies to omit push URLs from access logs.
+| Method/path                                  | Input                                                                          |
+| -------------------------------------------- | ------------------------------------------------------------------------------ |
+| `GET /api/monitor/<token>?status=up&value=1` | URL token plus query fields.                                                   |
+| `POST /api/monitor`                          | `Authorization: Bearer <token>` plus JSON `{"status":"up","value":1}`.         |
+| `POST /api/monitor/<token>`                  | Also accepted; the path and Bearer credentials must identify the same monitor. |
 
-CORS is disabled unless `cors: ["https://example.com"]` lists explicit allowed origins. Proxy
-headers are ignored by default; enable `proxy: true` only behind a trusted reverse proxy that
-replaces forwarded headers. With proxy trust enabled, only the nearest forwarded client address is
-used (`maxIpsCount=1`), ignoring client-supplied prefixes. HSTS is sent only for HTTPS requests,
-including HTTPS reported by a trusted proxy. `HOST` and `PORT` control the listener (default
-`0.0.0.0:3000`); invalid ports fail startup. The CSP restricts scripts and styles to same-origin
-files. Native controls and external CSS need no inline-style exception. Incident messages render as
-escaped text with preserved line breaks, including legacy `<br>` separators.
+`status` must be `up`, `degraded` or `down`. `value` is optional (defaults to zero) and must parse
+as a finite number. POST also accepts report fields in the query when its body has no `status`
+field. Accepted reports return 200 with `{"status":"ok"}`.
 
-Subscription links use HMAC-SHA256 with the configured `salt`, binding the address, purpose and
-expiry. Confirmations expire after 48 hours; request another confirmation if an older link has
-expired. Legacy confirmation links are no longer accepted. New unsubscribe links do not expire, and
-existing legacy unsubscribe links remain valid, including when SMTP is disabled. Keep `salt` stable
-to preserve those links; SMTP configurations require at least 32 characters.
+| Failure                                                                            | Status                               |
+| ---------------------------------------------------------------------------------- | ------------------------------------ |
+| Missing, malformed or unrecognized POST Bearer credential                          | 401 with `WWW-Authenticate: Bearer`. |
+| Unknown GET URL token, or a POST path token not matching the authenticated monitor | 404.                                 |
+| Invalid status or supplied non-numeric, non-finite or empty value                  | 400.                                 |
 
-The subscribe endpoint is disabled without SMTP. With SMTP, every subscription attempt counts toward
-a limit of 5 per client IP per 15 minutes and 100 globally per hour. Excess requests return 429 with
-`Retry-After` in seconds. These fixed-window counters are in memory and reset on restart.
+An unknown Bearer token is an authentication failure (401), not the GET route's unknown-token 404.
+Keep URL credentials and Authorization headers out of application, client and proxy logs.
 
-Subscribe, confirm and unsubscribe accept only a single valid email address, limited to 254 UTF-8
-bytes. Oversized input, address lists, display-name forms and header injection are rejected before
-mail delivery. Nodemailer 10.5.0 supplies its own TypeScript declarations; no separate type package
-is required. SMTP transport selection remains implicit TLS on 465, required STARTTLS on 587, and
-neither implicit TLS nor required STARTTLS on 25.
+### Subscriptions
+
+`POST /api/subscribe` accepts JSON `{"email":"<email-address>"}` with
+`Content-Type: application/json`; replace the placeholder with one valid address. Successful
+requests return 200 with `{"status":"ok"}` and send a confirmation unless already active. Pending
+subscriptions can request confirmation again. Invalid or oversized addresses return 400; addresses
+are limited to 254 UTF-8 bytes. JSON/form bodies above 16 KB return 413. SMTP disabled returns 404.
+Mail delivery failure returns a controlled 503 without stopping the service.
+
+With SMTP enabled, every attempt counts toward **5 requests per IP per 15 minutes** and **100
+globally per hour**. Rate-limited requests return 429 with `Retry-After` in seconds. Counters are in
+memory and reset on restart. Trusted proxy setup is necessary for accurate client IPs behind nginx.
+
+Mailed links go to `GET /api/confirm-subscription` and `GET /api/unsubscribe`, binding the address,
+purpose and expiry with HMAC-SHA256 and constant-time comparison. Confirmations expire after 48
+hours; unsubscribe links use `expires=0` and do not expire while the signing salt stays the same.
+Valid and invalid links redirect to the page with a result message. Legacy unsubscribe hashes are
+accepted with the unchanged salt, including when SMTP is absent; see [upgrade notes](#upgrade-notes)
+for rotation effects.
+
+## Mail and Operational Diagnostics
+
+Delivery is queued (at most 100 outstanding messages), limited to 10 seconds per attempt and retried
+at most twice, with 250 ms then 500 ms backoff. Closing the queue cancels pending retry delays. All
+mail sends are awaited and caught. Confirmations and incident notices include `List-Unsubscribe`;
+recipients come from the subscriber list, not a fixed config `to` field. Nodemailer 10.5.0 supplies
+its own TypeScript declarations.
+
+HTTP failures log error codes, response status and diagnostic messages; fatal errors and server
+failures include stacks. Configured credentials, Bearer values and push URL tokens are redacted.
+Global rejection/exception handlers close the service gracefully. Fatal shutdown arms an unref'd
+15-second exit deadline for lingering handles. Normal shutdown cancels outstanding work and closes
+SQLite within a 10-second deadline; Compose allows 15 seconds before stopping it.
+
+The CSP restricts scripts and styles to same-origin files; the frontend needs no inline exception.
+Other headers prevent framing and MIME sniffing and suppress referrer information. HSTS is sent only
+over HTTPS, including HTTPS reported by a trusted proxy.
 
 ### Dependency audit follow-up
 
@@ -364,29 +467,20 @@ static assets through Koa. CI continues to report both production audits.
 
 ## Daily history, snapshots and preflight checks
 
-Migration 4 creates `monitor_daily` and backfills the last 91 UTC calendar dates (90 days ago
-through today) in one SQL aggregation. It uses the existing timestamp index to bound the scan; the
-migration and its completion marker commit together. Conflict updates replace counts rather than
-adding them, so re-running the backfill does not double-count. Each subsequent raw check, daily
-counter and runtime-state update commits in the same transaction. Unknown checks remain in raw
-history and state but add no daily samples. Missing or zero-count days have null uptime; the
-snapshot's overall uptime averages only days with known checks. Daily thresholds retain their
-existing meaning, including degraded checks counting toward uptime.
+The migration backfill uses the existing timestamp index to bound one SQL aggregation to the last 91
+UTC dates (90 days ago through today). Unknown checks remain in raw history/state but add no daily
+samples. Missing or zero-count days have null uptime and an explicit "no data" label; overall uptime
+averages only days with known checks. Degraded checks count toward uptime. Calendar-day summaries
+apply the configurable daily thresholds.
 
 SQLite uses WAL, `synchronous=NORMAL`, a 5-second busy timeout, and the `(monitor_id, created)`
 index. Cleanup still removes raw checks older than 91 days, trims expired daily buckets and requests
-a bounded incremental vacuum. New files enable incremental auto-vacuum before creating tables.
-Existing databases that use `auto_vacuum=NONE` need a separate one-time `VACUUM` after selecting
-`auto_vacuum=INCREMENTAL` to reclaim pages incrementally; startup does not perform a full rewrite of
-an existing database.
+a bounded incremental vacuum. New files enable incremental auto-vacuum before creating tables. See
+the upgrade notes for existing files that need a one-time rebuild.
 
-`GET /api/status` returns public configuration, visible monitors and their 91-day histories, groups,
-current incidents and recent incidents. It excludes monitor tokens and private config. The JSON,
-gzip and Brotli representations are built in memory at startup, after each recorded check/incident
-change and after cleanup. Requests do not query SQLite or serialize/compress the snapshot. Responses
-use a weak ETag shared across encodings, `Vary: Accept-Encoding`, and
-`Cache-Control: public, max-age=15, stale-while-revalidate=60`. Send `If-None-Match` to receive 304
-when unchanged. Legacy overview, monitor-history and incident endpoints remain available.
+The in-memory snapshot is rebuilt at startup, after recorded check/incident changes and after
+cleanup. Its HTTP caching and compression contract is documented in the
+[API reference](#snapshot-caching).
 
 The server reads the built index at startup and keeps an injected version in memory, preserving the
 container's read-only root filesystem. Its `status-snapshot` JSON data block escapes `<`, titles are
@@ -407,10 +501,21 @@ labelled and excluded from the uptime average. Colours follow `prefers-color-sch
 remains escaped with line breaks. The subscription dialog loads on demand and starts with an empty
 email field.
 
-`npm run buildall` enforces a total JavaScript budget below 70,000 gzip bytes, including lazy
-chunks. `npm run size --prefix frontend-vite` repeats the measurement using Node's `gzipSync`
-defaults. The frontend slimming reduced the built JavaScript from 115,695 to 50,988 gzip bytes
-(50,012 for the entry and 976 for the subscription dialog).
+### Measured Overhaul Results
+
+Measurements on the overhaul branch, before and after the frontend slimming commit:
+
+| Metric                       | Before frontend slimming | After frontend slimming                             |
+| ---------------------------- | ------------------------ | --------------------------------------------------- |
+| Total JavaScript, gzip bytes | 115,695                  | 50,988 (50,012 entry + 976 lazy subscription chunk) |
+
+The polling and in-memory API behavior above are verified by the branch's tests. These are branch
+build measurements and implementation/test results; production latency and load testing are separate
+deployment checks. `npm run buildall` enforces total JavaScript below 70,000 gzip bytes, including
+lazy chunks. `npm run size --prefix frontend-vite` repeats the measurement using Node's `gzipSync`
+defaults.
+
+### Preflight Checks
 
 Build the server with `npm run build` (also included in `npm run buildall`) before using the CLI:
 
@@ -425,3 +530,18 @@ Invalid configuration exits 1. Monitor checks run each HTTP monitor once with th
 redirect and body safeguards, print id/name/status/elapsed (milliseconds), and exit 1 if any is
 down. They use an isolated in-memory database and do not send notifications or change deployment
 data. `npm test` compiles the server first so CLI tests exercise the actual `dist/cli.js` process.
+
+## Roadmap
+
+The following are **not implemented**:
+
+- Manual incident creation and maintenance windows.
+- An administration UI.
+- Multi-region probes and high availability.
+- Slack/webhook and other notification providers.
+- An optional PostgreSQL storage backend.
+- Ping monitors and optional latency/metric graphs.
+
+## License
+
+This project is released under the MIT License.
