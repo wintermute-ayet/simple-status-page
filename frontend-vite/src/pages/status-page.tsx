@@ -120,11 +120,11 @@ function StatusPage() {
 
 	const numDegradedServices =
 		overviewData.monitors !== undefined
-			? overviewData.monitors.filter((monitor: any) => monitor.status === "degraded").length
+			? overviewData.monitors.filter((monitor) => monitor.status === "degraded").length
 			: 0;
 	const numDownServices =
 		overviewData.monitors !== undefined
-			? overviewData.monitors.filter((monitor: any) => monitor.status === "down").length
+			? overviewData.monitors.filter((monitor) => monitor.status === "down").length
 			: 0;
 	const numActiveIncidents =
 		incidentData !== undefined

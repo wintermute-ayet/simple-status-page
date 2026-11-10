@@ -11,7 +11,7 @@ const SvgFavicon: React.FC<SvgFaviconProps> = ({ svgMarkup }) => {
 		};
 
 		const setFavicon = (svgDataUrl: string): void => {
-			let link: HTMLLinkElement =
+			const link: HTMLLinkElement =
 				document.querySelector("link[rel*='icon']") || document.createElement("link");
 			link.type = "image/svg+xml";
 			link.rel = "shortcut icon";

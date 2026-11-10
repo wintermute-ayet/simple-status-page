@@ -268,24 +268,26 @@ async function startServer() {
 				);
 				monitorRetries[monitor.id]++;
 			}
-		} else {
-			const [status, value, ts] = monitorLastApiStatus[monitor.id];
-			if (Date.now() - ts <= monitor.retries * monitor.checkInterval) {
-				console.info(
-					`checkApiMonitor #${monitor.id} has not reported ${Date.now() - ts} ms ago, resetting retries`
-				);
-				monitorRetries[monitor.id] = 0;
-			}
 		}
 
 		if (monitorRetries[monitor.id] >= monitor.retries) {
-			console.info(
-				`checkApiMonitor #${monitor.id} is not responding and considered down after ${monitorRetries[monitor.id]} retries`
-			);
-			if (monitor.visible) {
-				incidentTracker(monitor.id, "down");
+			const [lastStatus, lastValue, lastTs] = monitorLastApiStatus[monitor.id] || ["down", 0, 0];
+			if (Date.now() - lastTs <= monitor.retries * monitor.checkInterval) {
+				console.info(`checkApiMonitor #${monitor.id} has reported again, resetting retries`);
+				monitorRetries[monitor.id] = 0;
+				if (monitor.visible) {
+					incidentTracker(monitor.id, lastStatus);
+				}
+				addMonitorStatus(db, monitor.id, lastStatus, lastValue);
+			} else {
+				console.info(
+					`checkApiMonitor #${monitor.id} is not responding and considered down after ${monitorRetries[monitor.id]} retries`
+				);
+				if (monitor.visible) {
+					incidentTracker(monitor.id, "down");
+				}
+				addMonitorStatus(db, monitor.id, "down", 0);
 			}
-			addMonitorStatus(db, monitor.id, "down", 0);
 		}
 	};
 

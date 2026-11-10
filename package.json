@@ -7,9 +7,10 @@
 		"deps": "npm ci && cd frontend-vite && npm ci && cd ..",
 		"build": "tsc",
 		"buildall": "tsc && cd frontend-vite && npm run build && cd ..",
+		"lint": "npm run lint --prefix frontend-vite",
 		"watch": "tsc && concurrently \"tsc -w\" \"nodemon dist\"",
 		"start": "NODE_ENV=production node ./dist/server.js",
-		"test": "jest",
+		"test": "vitest run",
 		"prettier:server": "prettier --write \"src/**/*.ts\"",
 		"prettier:frontend": "prettier --write \"frontend-vite/**/*.tsx\"",
 		"prettier:all": "npm run prettier:server && npm run prettier:frontend"
@@ -40,7 +41,11 @@
 		"@types/koa-bodyparser": "^4.3.12",
 		"@types/koa-static": "^4.0.4",
 		"@types/nodemailer": "^6.4.14",
+		"@types/node": "^24.0.0",
 		"@types/validator": "^13.11.7",
-		"prettier": "^3.2.2"
+		"prettier": "^3.2.2",
+		"typescript": "^5.9.3",
+		"vite": "^7.3.0",
+		"vitest": "^5.1.0"
 	}
 }

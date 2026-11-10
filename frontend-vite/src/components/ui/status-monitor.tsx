@@ -31,7 +31,7 @@ type StatusMonitorProps = {
 };
 
 // cache to avoid re-fetching data when switching tabs or if the server wants to keep the existing details
-const statusDataCache: any = {};
+const statusDataCache: Record<string, UptimeDay[]> = {};
 
 const StatusMonitor: React.FC<StatusMonitorProps> = ({ data }) => {
 	const initialData: UptimeDay[] = Array.from({ length: 91 }, (_, i) => {
