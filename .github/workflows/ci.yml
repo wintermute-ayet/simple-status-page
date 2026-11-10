@@ -57,11 +57,21 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Smoke test container and frontend bundle
         run: |
+          cleanup() {
+            docker logs status-page-ci || true
+            docker rm -f status-page-ci >/dev/null || true
+            docker volume rm status-page-ci-data >/dev/null || true
+          }
+          trap cleanup EXIT
+          docker volume create status-page-ci-data >/dev/null
           docker run --detach --name status-page-ci \
+            --init --stop-timeout 15 --memory 512m \
+            --read-only --tmpfs /tmp:size=16m,mode=1777,noexec,nosuid \
+            --cap-drop ALL --security-opt no-new-privileges \
             --publish 127.0.0.1:3000:3000 \
+            --mount type=volume,source=status-page-ci-data,target=/app/data \
             --mount type=bind,source="$PWD/data/config.example.yml",target=/app/data/config.yaml,readonly \
             simple-status-page:ci
-          trap 'docker logs status-page-ci; docker rm -f status-page-ci >/dev/null' EXIT
           healthy=false
           for attempt in $(seq 1 30); do
             if [ "$(docker inspect --format '{{.State.Health.Status}}' status-page-ci)" = healthy ]; then

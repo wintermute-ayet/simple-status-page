@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MonitorRuntime, type HttpRequest } from "../src/monitors";
 import { initializeDatabase, type MonitorState } from "../src/database";
 import migrateDatabase from "../src/database-migrations";
-import { makeConfig } from "./helpers";
+import * as database from "../src/database";
+import { makeConfig, testToken } from "./helpers";
 
 let db: Database;
 let runtime: MonitorRuntime;
@@ -45,6 +46,35 @@ function response(
 }
 
 describe("API monitor state", () => {
+	it("requires resolveAfter consecutive up checks to resolve a degraded incident", async () => {
+		const config = makeConfig({ incidents: { degraded: { createAfter: 3, resolveAfter: 3 } } });
+		const resolved = vi.spyOn(database, "resolveIncident");
+		runtime = new MonitorRuntime(config, db);
+		runtime.receiveReport(1, "degraded", 0);
+		for (let check = 0; check < 3; check++) await runtime.checkApiMonitor(config.monitors[0]);
+		expect(state()).toMatchObject({ up_count: 3, healthy_count: 0 });
+		expect(db.prepare("SELECT status FROM incidents").all()).toEqual([{ status: "active" }]);
+		runtime.receiveReport(1, "up", 0);
+		for (let check = 0; check < 2; check++) await runtime.checkApiMonitor(config.monitors[0]);
+		expect(db.prepare("SELECT status FROM incidents").all()).toEqual([{ status: "active" }]);
+		expect(resolved).not.toHaveBeenCalled();
+		await runtime.stop();
+		runtime = new MonitorRuntime(config, db);
+		expect(state().healthy_count).toBe(2);
+		await runtime.checkApiMonitor(config.monitors[0]);
+		expect(resolved).toHaveBeenCalledExactlyOnceWith(db, 1, "degraded");
+		expect(db.prepare("SELECT status FROM incidents").all()).toEqual([{ status: "resolved" }]);
+	});
+	it("keeps one degraded incident across degraded/up/degraded flapping", async () => {
+		const config = makeConfig({ incidents: { degraded: { createAfter: 1, resolveAfter: 2 } } });
+		runtime = new MonitorRuntime(config, db);
+		for (const status of ["degraded", "up", "degraded"] as const) {
+			runtime.receiveReport(1, status, 0);
+			await runtime.checkApiMonitor(config.monitors[0]);
+		}
+		expect(db.prepare("SELECT status FROM incidents").all()).toEqual([{ status: "active" }]);
+		expect(state().healthy_count).toBe(0);
+	});
 	it("keeps never-reported monitors down after exhausting retries", async () => {
 		const config = makeConfig();
 		runtime = new MonitorRuntime(config, db);
@@ -132,7 +162,12 @@ describe("API monitor state", () => {
 		vi.setSystemTime(Date.now() + 1001);
 		await runtime.checkApiMonitor(config.monitors[0]);
 		expect(checks().at(-1)).toEqual({ status: "unknown", val: 0 });
-		expect(state()).toMatchObject({ down_count: 0, degraded_count: 0, up_count: 0 });
+		expect(state()).toMatchObject({
+			down_count: 0,
+			degraded_count: 0,
+			up_count: 0,
+			healthy_count: 0
+		});
 		expect(db.prepare("SELECT * FROM incidents").all()).toEqual([]);
 	});
 	it("retains the visibility guard", async () => {
@@ -198,8 +233,47 @@ describe("HTTP monitors", () => {
 		await runtime.checkHTTPMonitor(config.monitors[0]);
 		expect(checks()).toEqual([{ status: "down", val: 200 }]);
 	});
+	it("logs failure code, HTTP status, message and stack while redacting tokens", async () => {
+		const config = httpConfig();
+		const error = Object.assign(
+			new Error(`Failed GET https://example.com/api/monitor/${testToken}`),
+			{ code: "ECONNRESET", response: { status: 502 } }
+		);
+		runtime = new MonitorRuntime(
+			config,
+			db,
+			undefined,
+			vi.fn<HttpRequest>().mockRejectedValue(error)
+		);
+		await runtime.checkHTTPMonitor(config.monitors[0]);
+		expect(console.warn).toHaveBeenCalledWith(
+			"HTTP monitor #1 request failed",
+			expect.objectContaining({
+				code: "ECONNRESET",
+				status: 502,
+				message: expect.stringContaining("Failed GET"),
+				stack: expect.stringContaining("Error:")
+			})
+		);
+		expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain(testToken);
+	});
+	it.each(["", "application/octet-stream"])(
+		"does not gate content type %j without a regexp",
+		async (contentType) => {
+			const config = httpConfig({ regexp: "" });
+			runtime = new MonitorRuntime(
+				config,
+				db,
+				undefined,
+				vi.fn<HttpRequest>().mockResolvedValue(response("non-empty body", 200, contentType))
+			);
+			await runtime.checkHTTPMonitor(config.monitors[0]);
+			expect(checks().at(-1)?.status).toBe("up");
+		}
+	);
 	it.each([
 		['{"status":"healthy"}', "application/json", "up"],
+		["healthy", "", "up"],
 		[{ healthy: true }, "application/json", "down"],
 		["healthy", "application/octet-stream", "down"],
 		["bad", "text/plain", "down"],
@@ -223,6 +297,25 @@ describe("HTTP monitors", () => {
 		);
 		await runtime.checkHTTPMonitor(config.monitors[0]);
 		expect(checks().at(-1)?.status).toBe("up");
+	});
+	it("resets healthy recovery even when an HTTP failure is still below the retry threshold", async () => {
+		const config = httpConfig({
+			retries: 3,
+			incidents: { degraded: { createAfter: 1, resolveAfter: 2 } }
+		});
+		const request = vi
+			.fn<HttpRequest>()
+			.mockImplementationOnce(() => {
+				vi.setSystemTime(Date.now() + 150);
+				return Promise.resolve(response());
+			})
+			.mockResolvedValueOnce(response())
+			.mockRejectedValueOnce(new Error("Temporary failure"))
+			.mockResolvedValueOnce(response());
+		runtime = new MonitorRuntime(config, db, undefined, request);
+		for (let check = 0; check < 4; check++) await runtime.checkHTTPMonitor(config.monitors[0]);
+		expect(state().healthy_count).toBe(1);
+		expect(db.prepare("SELECT status FROM incidents").all()).toEqual([{ status: "active" }]);
 	});
 	it("prevents overlapping requests for one monitor", async () => {
 		const config = httpConfig();
@@ -251,6 +344,21 @@ describe("HTTP monitors", () => {
 		expect(request).toHaveBeenCalledTimes(1);
 		await runtime.stop();
 		await vi.advanceTimersByTimeAsync(10000);
+		expect(request).toHaveBeenCalledTimes(1);
+	});
+	it.each([
+		[1000, 37],
+		[5000, 185],
+		[60000, 370]
+	])("scales startup jitter with interval %i", async (checkInterval, delay) => {
+		vi.useFakeTimers();
+		const config = httpConfig({ checkInterval });
+		const request = vi.fn<HttpRequest>().mockResolvedValue(response());
+		runtime = new MonitorRuntime(config, db, undefined, request);
+		runtime.start();
+		await vi.advanceTimersByTimeAsync(delay - 1);
+		expect(request).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
 		expect(request).toHaveBeenCalledTimes(1);
 	});
 });

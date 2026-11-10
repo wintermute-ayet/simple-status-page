@@ -62,7 +62,8 @@ has its unique way of monitoring and reporting the status of your services.
 - Both monitor types support optional incident tracking. Incidents can be automatically created and
   resolved based on the monitor's status over time, as defined in the `incidents` configuration.
 - `createAfter`: Number of consecutive failure checks required before creating an incident.
-- `resolveAfter`: Number of consecutive successful checks required before resolving an incident.
+- `resolveAfter`: Consecutive `up` checks for degraded incidents; consecutive `up` or `degraded`
+  checks for down incidents.
 
 ## Configuration Guide
 
@@ -79,7 +80,7 @@ of the configuration parameters:
 
 - **salt**:
 
-  - A string used for hashing (e.g., in email confirmation links).
+  - A secret used to sign subscription links; at least 32 characters when SMTP is configured.
 
 - **database**:
 
@@ -110,7 +111,7 @@ of the configuration parameters:
     - `url`: (for HTTP monitors) The URL to check.
     - `regexp`: (optional, for HTTP monitors) Regular expression to match in the response body.
     - `validStatusCodes`: (optional, for HTTP monitors) Array of HTTP status codes considered valid.
-    - `checkInterval`: Time interval (in milliseconds) for performing checks.
+    - `checkInterval`: Time interval (in milliseconds) for performing checks, minimum 1000.
     - `retries`: Number of retries before a check is considered failed.
     - `timeoutDownMs`: HTTP request timeout (in milliseconds) for a down status.
     - `timeoutDegradedMs`: HTTP request duration (in milliseconds) for a degraded status.
@@ -266,29 +267,37 @@ a startup warning; the canonical key takes precedence when both are present.
 
 SMTP is optional. Without its block, subscriptions are disabled and the subscribe button is hidden.
 Port 465 uses implicit TLS; port 587 uses STARTTLS. Delivery is queued (at most 100 queued
-messages), time limited to 10 seconds per attempt and retried at most twice. A delivery failure
-returns a controlled error and does not terminate the service. Pending subscriptions can request
-confirmation again. Shutdown drains or cancels outstanding work before closing SQLite.
+messages), time limited to 10 seconds per attempt and retried at most twice, with 250 ms then 500 ms
+backoff. Closing the queue cancels pending retry delays. A delivery failure returns a controlled
+error and does not terminate the service. Pending subscriptions can request confirmation again.
+Shutdown drains or cancels outstanding work before closing SQLite.
 
-`resolveAfter` counts consecutive checks that are **up or degraded**. A down or unknown check resets
-that recovery streak. A failure that still meets `createAfter` for its incident type takes
-precedence and keeps that incident active. Degraded service can therefore resolve an outage while
-retaining a performance incident. Incident counters, retry counters and the last pushed report
-survive restarts; each recorded check and its runtime state are committed together. Migration 3 adds
-`monitor_state` and extends the raw check table to accept `unknown`, preserving existing checks and
-indexes.
+For down incidents, `resolveAfter` counts consecutive checks that are **up or degraded**. For
+degraded incidents, it counts consecutive **up** checks only, using a separate persisted
+`healthy_count`. Degraded/down/unknown checks reset this healthy streak; down/unknown checks also
+reset the outage recovery streak. A failure that still meets `createAfter` takes precedence and
+keeps that incident active. Degraded service can resolve an outage while retaining a performance
+incident. Incident counters, retry counters and the last pushed report survive restarts; each
+recorded check and its runtime state are committed together. Migration 3 adds `monitor_state` and
+extends the raw check table to accept `unknown`, preserving existing checks and indexes.
 
-HTTP monitors run their first check within 100 ms of startup with a deterministic offset per id.
-Checks never overlap, time out individually, follow at most five redirects and accept at most 1 MB
-of text, JSON, XML or JavaScript as text. Binary bodies are rejected. The regular expression is
-compiled once at startup. API monitors keep the existing GET callback and default to
-`onMissing: down`; `onMissing: unknown` records no data instead. Missing `value` defaults to zero;
-supplied values must be finite numbers.
+HTTP monitors run their first check with a deterministic offset per id, bounded by the smaller of
+10% of `checkInterval` and 1000 ms. Intervals must be at least 1000 ms. Checks never overlap, time
+out individually, follow at most five redirects and accept at most 1 MB of response text. When a
+regular expression is configured, content types must be text, JSON, XML or JavaScript; a missing
+content type is treated as text. The regular expression is compiled once at startup. API monitors
+keep the existing GET callback and default to `onMissing: down`; `onMissing: unknown` records no
+data instead. Missing `value` defaults to zero; supplied values must be finite numbers.
 
 `dailyThresholds.down` and `dailyThresholds.degraded` are fractions of known checks used for each
 calendar day's summary (defaults `0.001` and `0.005`). Unknown checks and days without data are
 excluded from uptime. No-data days have null uptime, and an entirely empty history displays an em
 dash instead of zero percent.
+
+HTTP failures log their error code, response status and diagnostic message; fatal errors and server
+failures include stacks. Configured credentials, Bearer values and push URL tokens are redacted.
+Fatal shutdown arms an unref'd 15-second exit deadline for lingering handles. Normal shutdown has a
+10-second server deadline, and Compose allows 15 seconds before stopping it.
 
 ## HTTP and subscription security
 
@@ -306,22 +315,24 @@ curl --request POST https://example.com/api/monitor \
 
 `POST /api/monitor/<token>` also works; the path and Bearer tokens must belong to the same monitor.
 Token comparisons use equal-length SHA-256 digests and constant-time comparison. The application
-logs monitor ids only. Configure reverse proxies to omit push URLs from access logs.
+logs monitor ids and zero-based token slots only (`uuid` is slot 0, rotation tokens follow).
+Configure reverse proxies to omit push URLs from access logs.
 
 CORS is disabled unless `cors: ["https://example.com"]` lists explicit allowed origins. Proxy
 headers are ignored by default; enable `proxy: true` only behind a trusted reverse proxy that
-replaces forwarded headers. HSTS is sent only for HTTPS requests, including HTTPS reported by a
-trusted proxy. `HOST` and `PORT` control the listener (default `0.0.0.0:3000`); invalid ports fail
-startup. The CSP restricts scripts to same-origin files. Inline styles remain permitted because the
-current Radix dialog and tooltip dependencies inject scroll-lock styles via `react-style-singleton`.
-Incident messages render as escaped text with preserved line breaks, including legacy `<br>`
-separators.
+replaces forwarded headers. With proxy trust enabled, only the nearest forwarded client address is
+used (`maxIpsCount=1`), ignoring client-supplied prefixes. HSTS is sent only for HTTPS requests,
+including HTTPS reported by a trusted proxy. `HOST` and `PORT` control the listener (default
+`0.0.0.0:3000`); invalid ports fail startup. The CSP restricts scripts to same-origin files. Inline
+styles remain permitted because the current Radix dialog and tooltip dependencies inject scroll-lock
+styles via `react-style-singleton`. Incident messages render as escaped text with preserved line
+breaks, including legacy `<br>` separators.
 
 Subscription links use HMAC-SHA256 with the configured `salt`, binding the address, purpose and
 expiry. Confirmations expire after 48 hours; request another confirmation if an older link has
 expired. Legacy confirmation links are no longer accepted. New unsubscribe links do not expire, and
 existing legacy unsubscribe links remain valid, including when SMTP is disabled. Keep `salt` stable
-to preserve those links.
+to preserve those links; SMTP configurations require at least 32 characters.
 
 The subscribe endpoint is disabled without SMTP. With SMTP, every subscription attempt counts toward
 a limit of 5 per client IP per 15 minutes and 100 globally per hour. Excess requests return 429 with

@@ -32,6 +32,7 @@ export interface MonitorState {
 	down_count: number;
 	degraded_count: number;
 	up_count: number;
+	healthy_count: number;
 }
 export function initialMonitorState(monitorId: number): MonitorState {
 	return {
@@ -42,7 +43,8 @@ export function initialMonitorState(monitorId: number): MonitorState {
 		retries: 0,
 		down_count: 0,
 		degraded_count: 0,
-		up_count: 0
+		up_count: 0,
+		healthy_count: 0
 	};
 }
 export function loadMonitorStates(db: Database): Map<number, MonitorState> {
@@ -52,11 +54,12 @@ export function loadMonitorStates(db: Database): Map<number, MonitorState> {
 export function saveMonitorState(db: Database, state: MonitorState): void {
 	db.prepare(
 		`INSERT INTO monitor_state
-		(monitor_id, last_status, last_value, last_report_at, retries, down_count, degraded_count, up_count)
-		VALUES (@monitor_id, @last_status, @last_value, @last_report_at, @retries, @down_count, @degraded_count, @up_count)
+		(monitor_id, last_status, last_value, last_report_at, retries, down_count, degraded_count, up_count, healthy_count)
+		VALUES (@monitor_id, @last_status, @last_value, @last_report_at, @retries, @down_count, @degraded_count, @up_count, @healthy_count)
 		ON CONFLICT(monitor_id) DO UPDATE SET last_status=excluded.last_status,
 		last_value=excluded.last_value, last_report_at=excluded.last_report_at, retries=excluded.retries,
-		down_count=excluded.down_count, degraded_count=excluded.degraded_count, up_count=excluded.up_count`
+		down_count=excluded.down_count, degraded_count=excluded.degraded_count, up_count=excluded.up_count,
+		healthy_count=excluded.healthy_count`
 	).run(state);
 }
 export function addMonitorStatus(

@@ -46,9 +46,12 @@ describe("constant-time token lookup", () => {
 			}
 		);
 		const tokens = new PushTokens(config.monitors);
-		expect(tokens.lookup(testToken)?.id).toBe(1);
-		expect(tokens.lookup(rotationToken)?.id).toBe(1);
-		expect(tokens.lookup("test-second-monitor-token")?.id).toBe(2);
+		expect(tokens.lookup(testToken)).toMatchObject({ monitor: { id: 1 }, slot: 0 });
+		expect(tokens.lookup(rotationToken)).toMatchObject({ monitor: { id: 1 }, slot: 1 });
+		expect(tokens.lookup("test-second-monitor-token")).toMatchObject({
+			monitor: { id: 2 },
+			slot: 0
+		});
 		for (const value of [
 			undefined,
 			null,

@@ -123,6 +123,7 @@ describe("server routes", () => {
 			last_status: "up",
 			last_value: 8
 		});
+		expect(console.info).toHaveBeenCalledWith("Monitor #1 callback received (slot 1)");
 	});
 	it("rejects unauthorized, mismatched and malformed POST reports without logging tokens", async () => {
 		const config = makeConfig(
@@ -169,7 +170,7 @@ describe("server routes", () => {
 		expect(db.prepare("SELECT * FROM monitor_state").all()).toEqual([]);
 		await fetch(`${url}/api/monitor/${testToken}?status=up`);
 		const logged = JSON.stringify(vi.mocked(console.info).mock.calls);
-		expect(logged).toContain("Monitor #1 callback received");
+		expect(logged).toContain("Monitor #1 callback received (slot 0)");
 		expect(logged).not.toContain(testToken);
 		expect(logged).not.toContain(rotationToken);
 	});
@@ -188,6 +189,7 @@ describe("server routes", () => {
 	it("allows only configured CORS origins, including bearer preflight", async () => {
 		const url = await start(makeConfig({}, { cors: ["https://example.com"], proxy: true }));
 		expect(service.app.proxy).toBe(true);
+		expect(service.app.maxIpsCount).toBe(1);
 		const allowed = await fetch(url + "/healthz", { headers: { Origin: "https://example.com" } });
 		expect(allowed.headers.get("Access-Control-Allow-Origin")).toBe("https://example.com");
 		expect(allowed.headers.get("Vary")).toContain("Origin");
@@ -205,6 +207,24 @@ describe("server routes", () => {
 		});
 		expect(preflight.status).toBe(204);
 		expect(preflight.headers.get("Access-Control-Allow-Headers")).toContain("Authorization");
+	});
+	it("logs redacted server stacks for 5xx responses", async () => {
+		const url = await start();
+		const log = vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.spyOn(service.runtime, "receiveReport").mockImplementation(() => {
+			throw new Error(`Failed callback /api/monitor/${testToken}`);
+		});
+		const response = await fetch(`${url}/api/monitor/${testToken}?status=up`);
+		expect(response.status).toBe(500);
+		expect(await response.json()).toEqual({ error: "Internal server error" });
+		expect(log).toHaveBeenCalledWith(
+			"HTTP request failed",
+			expect.objectContaining({
+				message: expect.stringContaining("Failed callback"),
+				stack: expect.stringContaining("Error:")
+			})
+		);
+		expect(JSON.stringify(log.mock.calls)).not.toContain(testToken);
 	});
 	it("validates monitor ids and finite report values", async () => {
 		const url = await start();
@@ -235,6 +255,29 @@ describe("server routes", () => {
 });
 
 describe("subscription routes", () => {
+	it("uses the nearest forwarded client address rather than attacker-controlled prefixes", async () => {
+		const fixture = mailFixture();
+		const url = await start(
+			makeConfig({}, { smtp: fixture.config.smtp, proxy: true }),
+			fixture.mail
+		);
+		for (let attempt = 0; attempt < 5; attempt++)
+			expect(
+				(
+					await subscribe(url, "invalid", "/api/subscribe", {
+						"X-Forwarded-For": `spoofed-${attempt}, same-client`
+					})
+				).status
+			).toBe(400);
+		expect(
+			(
+				await subscribe(url, testEmail, "/api/subscribe", {
+					"X-Forwarded-For": "another-spoof, same-client"
+				})
+			).status
+		).toBe(429);
+		expect(fixture.sendMail).not.toHaveBeenCalled();
+	});
 	it("sends canonical HMAC links, confirms once, and permits signed unsubscribe", async () => {
 		const fixture = mailFixture();
 		const url = await start(fixture.config, fixture.mail);

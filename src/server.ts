@@ -26,6 +26,7 @@ import { createMailQueue, type MailQueue } from "./mail";
 import { MonitorRuntime, type HttpRequest } from "./monitors";
 import { installProcessHandlers } from "./lifecycle";
 import { StatusCache, readIndexTemplate } from "./status";
+import { errorDetails, logRedactor } from "./logging";
 import {
 	PushTokens,
 	SubscriptionLinks,
@@ -53,6 +54,8 @@ export function createApplication(
 ) {
 	const app = new Koa();
 	app.proxy = config.proxy;
+	if (config.proxy) app.maxIpsCount = 1;
+	const redact = logRedactor(config);
 	const mail = options.mail ?? createMailQueue(config.smtp);
 	const tokens = new PushTokens(config.monitors);
 	const links = new SubscriptionLinks(config.salt, config.public.basedomain);
@@ -80,8 +83,8 @@ export function createApplication(
 		);
 	};
 	const runtime = new MonitorRuntime(config, db, notify, options.request, () => status.refresh());
-	app.on("error", () => {
-		console.error("HTTP request failed");
+	app.on("error", (error: unknown) => {
+		console.error("HTTP request failed", errorDetails(error, redact));
 	});
 	app.use(securityHeaders);
 	app.use(async (ctx, next) => {
@@ -136,16 +139,17 @@ export function createApplication(
 	});
 	const pushReport = (ctx: Context) => {
 		const bearer = /^Bearer ([^\s]+)$/i.exec(ctx.get("Authorization"))?.[1];
-		const monitor = tokens.lookup(ctx.method === "POST" ? bearer : ctx.params.token);
-		if (ctx.method === "POST" && !monitor) {
+		const match = tokens.lookup(ctx.method === "POST" ? bearer : ctx.params.token);
+		if (ctx.method === "POST" && !match) {
 			ctx.set("WWW-Authenticate", "Bearer");
 			ctx.throw(401, "Invalid authentication");
 		}
-		if (!monitor) ctx.throw(404, "Monitor not found");
+		if (!match) ctx.throw(404, "Monitor not found");
+		const { monitor, slot } = match;
 		if (
 			ctx.method === "POST" &&
 			ctx.params.token &&
-			tokens.lookup(ctx.params.token)?.id !== monitor.id
+			tokens.lookup(ctx.params.token)?.monitor.id !== monitor.id
 		)
 			ctx.throw(404, "Monitor not found");
 		const body: unknown = ctx.request.body;
@@ -156,7 +160,7 @@ export function createApplication(
 		const report = parseReport(input.status, "value" in input ? input.value : undefined);
 		if (!report) ctx.throw(400, "Status and value must be valid");
 		runtime.receiveReport(monitor.id, report.status, report.value);
-		console.info(`Monitor #${monitor.id} callback received`);
+		console.info(`Monitor #${monitor.id} callback received (slot ${slot})`);
 		ctx.body = { status: "ok" };
 	};
 	router.get("/api/monitor/:token", pushReport);
@@ -249,7 +253,7 @@ export function createApplication(
 	});
 	app.use(router.routes()).use(router.allowedMethods());
 	app.use(serve(path.join(__dirname, "../frontend-vite/dist")));
-	return { app, runtime, mail, status };
+	return { app, runtime, mail, status, redact };
 }
 
 export function startServer(config = readConfig(), options: { port?: number; host?: string } = {}) {
@@ -268,8 +272,8 @@ export function startServer(config = readConfig(), options: { port?: number; hos
 		try {
 			cleanupTables(db);
 			service.status.refresh();
-		} catch {
-			console.error("Database cleanup failed");
+		} catch (error) {
+			console.error("Database cleanup failed", errorDetails(error, service.redact));
 		}
 	};
 	cleanup();
@@ -300,11 +304,11 @@ export function startServer(config = readConfig(), options: { port?: number; hos
 		})();
 		return closing;
 	};
-	server.on("error", () => {
-		console.error("HTTP listener failed");
+	server.on("error", (error) => {
+		console.error("HTTP listener failed", errorDetails(error, service.redact));
 		process.exitCode = 1;
-		void shutdown().catch(() => {
-			console.error("Shutdown failed");
+		void shutdown().catch((error) => {
+			console.error("Shutdown failed", errorDetails(error, service.redact));
 		});
 	});
 	return { ...service, server, db, shutdown };
@@ -314,7 +318,7 @@ if (require.main === module) {
 	consoleStamp(console, { format: ":date(yyyy-mm-dd HH:MM:ss.l) :label" });
 	try {
 		const service = startServer();
-		installProcessHandlers(service.shutdown);
+		installProcessHandlers(service.shutdown, service.redact);
 	} catch (error) {
 		console.error("Startup failed:", error instanceof Error ? error.message : "Unknown error");
 		process.exitCode = 1;

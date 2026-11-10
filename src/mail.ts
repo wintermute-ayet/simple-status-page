@@ -29,7 +29,8 @@ export class MailQueue {
 	constructor(
 		private transport: MailTransport,
 		private timeoutMs = 10000,
-		private retries = 2
+		private retries = 2,
+		private retryDelayMs = 250
 	) {}
 
 	send(message: SendMailOptions): Promise<boolean> {
@@ -51,6 +52,10 @@ export class MailQueue {
 	}
 	private async deliver(message: SendMailOptions): Promise<boolean> {
 		for (let attempt = 0; attempt <= this.retries && !this.closed; attempt++) {
+			if (attempt > 0) {
+				await this.waitForRetry(Math.min(this.retryDelayMs * 2 ** (attempt - 1), 2000));
+				if (this.closed) break;
+			}
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
 				const deadline = new Promise<never>((_, reject) => {
@@ -67,6 +72,17 @@ export class MailQueue {
 			}
 		}
 		return false;
+	}
+	private waitForRetry(delay: number): Promise<void> {
+		return new Promise((resolve) => {
+			const finish = () => {
+				clearTimeout(timer);
+				this.cancelAttempt = undefined;
+				resolve();
+			};
+			const timer = setTimeout(finish, delay);
+			this.cancelAttempt = finish;
+		});
 	}
 	async drain(): Promise<void> {
 		await this.tail;

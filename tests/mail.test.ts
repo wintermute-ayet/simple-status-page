@@ -22,7 +22,9 @@ describe("bounded mail delivery", () => {
 		const smtp = transport();
 		vi.mocked(smtp.sendMail).mockRejectedValue(new Error("SMTP unavailable"));
 		queue = new MailQueue(smtp);
-		expect(await queue.send(message)).toBe(false);
+		const delivered = queue.send(message);
+		await vi.runAllTimersAsync();
+		expect(await delivered).toBe(false);
 		expect(smtp.sendMail).toHaveBeenCalledTimes(3);
 	});
 	it("recovers on a later attempt", async () => {
@@ -31,17 +33,34 @@ describe("bounded mail delivery", () => {
 			.mockRejectedValueOnce(new Error("Temporary"))
 			.mockResolvedValueOnce({});
 		queue = new MailQueue(smtp);
-		expect(await queue.send(message)).toBe(true);
+		const delivered = queue.send(message);
+		await vi.runAllTimersAsync();
+		expect(await delivered).toBe(true);
 		expect(smtp.sendMail).toHaveBeenCalledTimes(2);
 	});
 	it("times out hanging sends and continues with a bounded number of attempts", async () => {
 		const smtp = transport();
 		vi.mocked(smtp.sendMail).mockImplementation(() => new Promise(() => {}));
-		queue = new MailQueue(smtp, 10, 2);
+		queue = new MailQueue(smtp, 10, 2, 2);
 		const delivered = queue.send(message);
-		await vi.advanceTimersByTimeAsync(31);
+		await vi.advanceTimersByTimeAsync(37);
 		expect(await delivered).toBe(false);
 		expect(smtp.sendMail).toHaveBeenCalledTimes(3);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+	it("backs off between retries and cancels a waiting retry on close", async () => {
+		const smtp = transport();
+		vi.mocked(smtp.sendMail).mockRejectedValue(new Error("Temporary"));
+		queue = new MailQueue(smtp);
+		const delivered = queue.send(message);
+		await vi.advanceTimersByTimeAsync(249);
+		expect(smtp.sendMail).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(smtp.sendMail).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(499);
+		expect(smtp.sendMail).toHaveBeenCalledTimes(2);
+		queue.close();
+		expect(await delivered).toBe(false);
 		expect(vi.getTimerCount()).toBe(0);
 	});
 	it("serializes deliveries and cancels pending work on shutdown", async () => {

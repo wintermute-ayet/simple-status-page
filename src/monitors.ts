@@ -1,6 +1,7 @@
 import axios, { type AxiosRequestConfig, type AxiosResponse } from "axios";
 import type { Database } from "better-sqlite3";
 import type { Config, MonitorEntity, MonitorStatus } from "./config";
+import { errorDetails, logRedactor, type Redactor } from "./logging";
 import {
 	addMonitorStatus,
 	createIncident,
@@ -25,6 +26,7 @@ export class MonitorRuntime {
 	private pending = new Set<Promise<void>>();
 	private stopped = false;
 	private started = false;
+	private redact: Redactor;
 	constructor(
 		private config: Config,
 		private db: Database,
@@ -32,6 +34,7 @@ export class MonitorRuntime {
 		private request: HttpRequest = (url, options) => axios.get<unknown>(url, options),
 		private onChange: () => void = () => {}
 	) {
+		this.redact = logRedactor(config);
 		this.states = loadMonitorStates(db);
 		for (const monitor of config.monitors) {
 			if (!this.states.has(monitor.id))
@@ -56,6 +59,7 @@ export class MonitorRuntime {
 		state.down_count = status === "down" ? state.down_count + 1 : 0;
 		state.degraded_count = status === "degraded" ? state.degraded_count + 1 : 0;
 		state.up_count = status === "up" || status === "degraded" ? state.up_count + 1 : 0;
+		state.healthy_count = status === "up" ? state.healthy_count + 1 : 0;
 		const notifications: IncidentRow[] = [];
 		if (!monitor.visible) return notifications;
 		for (const type of ["down", "degraded"] as const) {
@@ -74,7 +78,9 @@ export class MonitorRuntime {
 					message.replace(/<br\s*\/?\s*>/gi, "\n")
 				);
 				if (incident) notifications.push(incident);
-			} else if (state.up_count >= rule.resolveAfter) {
+			} else if (
+				(type === "degraded" ? state.healthy_count : state.up_count) >= rule.resolveAfter
+			) {
 				notifications.push(...(resolveIncident(this.db, monitor.id, type) ?? []));
 			}
 		}
@@ -95,8 +101,9 @@ export class MonitorRuntime {
 		this.onChange();
 		console.info(`Monitor #${monitor.id} tracking ${status}`);
 		const results = await Promise.allSettled(incidents.map((incident) => this.notify(incident)));
-		if (results.some((result) => result.status === "rejected"))
-			console.error("Incident notification failed");
+		for (const result of results)
+			if (result.status === "rejected")
+				console.error("Incident notification failed", errorDetails(result.reason, this.redact));
 	}
 	async checkApiMonitor(monitor: MonitorEntity): Promise<void> {
 		if (this.stopped) return;
@@ -151,22 +158,29 @@ export class MonitorRuntime {
 					.toLowerCase();
 				const textBody =
 					typeof response.data === "string" &&
-					(response.data.length === 0 ||
+					(!contentType ||
 						/^(text\/|application\/(?:json|xml|javascript)$|application\/[\w.+-]+\+(?:json|xml)$)/.test(
 							contentType
 						));
 				if (
 					monitor.validStatusCodes.includes(response.status) &&
-					textBody &&
 					typeof response.data === "string" &&
 					Buffer.byteLength(response.data) <= 1024 * 1024 &&
-					(!monitor.compiledRegexp || monitor.compiledRegexp.test(response.data))
+					(!monitor.compiledRegexp || (textBody && monitor.compiledRegexp.test(response.data)))
 				) {
 					status = elapsedMs > monitor.timeoutDegradedMs ? "degraded" : "up";
+				} else {
+					console.warn(`HTTP monitor #${monitor.id} response rejected`, {
+						status: response.status,
+						message: "Unexpected status or response body"
+					});
 				}
-			} catch {
+			} catch (error) {
 				elapsedMs = Date.now() - startTime;
-				console.warn(`HTTP monitor #${monitor.id} request failed`);
+				console.warn(
+					`HTTP monitor #${monitor.id} request failed`,
+					errorDetails(error, this.redact)
+				);
 			}
 			if (this.stopped) return;
 			console.info(`HTTP monitor #${monitor.id} completed in ${elapsedMs} ms`);
@@ -177,6 +191,7 @@ export class MonitorRuntime {
 				last_report_at: Date.now()
 			};
 			state.retries = status === "down" ? Math.min(state.retries + 1, monitor.retries) : 0;
+			if (status !== "up") state.healthy_count = 0;
 			if (status === "down" && state.retries < monitor.retries) {
 				saveMonitorState(this.db, state);
 				this.states.set(monitor.id, state);
@@ -194,7 +209,11 @@ export class MonitorRuntime {
 		for (const monitor of this.config.monitors)
 			this.schedule(
 				monitor,
-				monitor.type === "http" ? (monitor.id * 37) % 100 : monitor.checkInterval
+				monitor.type === "http"
+					? Math.floor(
+							((((monitor.id % 100) * 37) % 100) / 100) * Math.min(monitor.checkInterval / 10, 1000)
+						)
+					: monitor.checkInterval
 			);
 	}
 	private schedule(monitor: MonitorEntity, delay: number): void {
@@ -203,8 +222,8 @@ export class MonitorRuntime {
 			if (this.stopped) return;
 			const task = (
 				monitor.type === "http" ? this.checkHTTPMonitor(monitor) : this.checkApiMonitor(monitor)
-			).catch(() => {
-				console.error(`Monitor #${monitor.id} check failed`);
+			).catch((error) => {
+				console.error(`Monitor #${monitor.id} check failed`, errorDetails(error, this.redact));
 			});
 			this.pending.add(task);
 			void task
@@ -212,8 +231,8 @@ export class MonitorRuntime {
 					this.pending.delete(task);
 					if (!this.stopped) this.schedule(monitor, monitor.checkInterval);
 				})
-				.catch(() => {
-					console.error("Monitor scheduling failed");
+				.catch((error) => {
+					console.error("Monitor scheduling failed", errorDetails(error, this.redact));
 				});
 		}, delay);
 		this.timers.add(timer);

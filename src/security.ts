@@ -19,14 +19,14 @@ export class PushTokens {
 				tokens: [monitor.uuid, ...monitor.tokens].map(digest)
 			}));
 	}
-	lookup(value: unknown): MonitorEntity | undefined {
+	lookup(value: unknown): { monitor: MonitorEntity; slot: number } | undefined {
 		if (typeof value !== "string") return undefined;
 		const candidate = digest(value);
-		let matched: MonitorEntity | undefined;
+		let matched: { monitor: MonitorEntity; slot: number } | undefined;
 		// Compare every slot, with a fixed-size digest even for differently sized input.
 		for (const entry of this.entries) {
-			for (const token of entry.tokens) {
-				if (timingSafeEqual(candidate, token)) matched = entry.monitor;
+			for (const [slot, token] of entry.tokens.entries()) {
+				if (timingSafeEqual(candidate, token)) matched = { monitor: entry.monitor, slot };
 			}
 		}
 		return matched;

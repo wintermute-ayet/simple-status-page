@@ -9,7 +9,7 @@ public:
   refreshInterval: 900
   basedomain: "http://localhost:3000"
 
-salt: "replace-with-a-long-random-secret" # used to sign subscription links
+salt: "replace-with-at-least-32-random-characters" # signs subscription links; >= 32 characters with SMTP
 
 dailyThresholds: # fractions of known checks; no-data checks and days are excluded
   down: 0.001
@@ -45,7 +45,7 @@ monitors: # list of monitors
     validStatusCodes: # optional, default: 200
       - 200
       - 404
-    checkInterval: 60000 # in ms
+    checkInterval: 60000 # in ms, minimum 1000
     retries: 3 # number of retries before tracking monitor_check "down"
     timeoutDownMs: 5000 # in ms
     timeoutDegradedMs: 1000 # in ms
@@ -55,7 +55,7 @@ monitors: # list of monitors
         resolveAfter: 2 # number of "up" or "degraded" checks before resolving incident
       degraded: # optional
         createAfter: 5 # number of "degraded" checks before creating incident
-        resolveAfter: 5 # consecutive "up" or "degraded" checks; active degradation takes precedence
+        resolveAfter: 5 # consecutive "up" checks only; degraded/down/unknown resets this streak
 
   - name: "Backend"
     id: 2

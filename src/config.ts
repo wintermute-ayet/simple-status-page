@@ -241,7 +241,7 @@ export function validateConfig(
 			tokens: extraTokens,
 			visible: boolean(raw.visible, `${location}.visible`, true),
 			url: raw.type === "http" ? httpUrl(raw.url, `${location}.url`) : "",
-			checkInterval: integer(raw.checkInterval, `${location}.checkInterval`, 60000),
+			checkInterval: integer(raw.checkInterval, `${location}.checkInterval`, 60000, 1000),
 			retries: integer(raw.retries, `${location}.retries`, 3),
 			timeoutDownMs,
 			timeoutDegradedMs,
@@ -292,6 +292,9 @@ export function validateConfig(
 			throw new Error("cors must contain origins without paths or queries");
 		return parsed.origin;
 	});
+	const salt = text(root.salt, "salt", smtp ? undefined : "");
+	if (smtp && salt.length < 32)
+		throw new Error("salt must contain at least 32 characters when SMTP is configured");
 	return {
 		public: {
 			favicon: text(publicConfig.favicon, "public.favicon", ""),
@@ -303,7 +306,7 @@ export function validateConfig(
 				"public.basedomain"
 			).replace(/\/$/, "")
 		},
-		salt: text(root.salt, "salt", smtp ? undefined : ""),
+		salt,
 		smtp,
 		groups,
 		database: { path: text(database.path, "database.path") },

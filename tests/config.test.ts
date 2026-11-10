@@ -13,6 +13,17 @@ describe("configuration validation", () => {
 		expect(config.cors).toEqual([]);
 		expect(config.proxy).toBe(false);
 	});
+	it("requires at least 32 salt characters only when SMTP is configured", () => {
+		const smtp = { host: "smtp.example.com", from: "test-sender", port: 587 };
+		for (const salt of [undefined, "", "x".repeat(31)])
+			expect(() => makeConfig({}, { smtp, salt })).toThrow(/salt/);
+		expect(makeConfig({}, { smtp, salt: "x".repeat(32) }).salt).toHaveLength(32);
+		expect(makeConfig({}, { salt: "" }).salt).toBe("");
+	});
+	it("requires check intervals of at least one second", () => {
+		expect(() => makeConfig({ checkInterval: 999 })).toThrow(/1000/);
+		expect(makeConfig({ checkInterval: 1000 }).monitors[0].checkInterval).toBe(1000);
+	});
 	it("accepts explicit CORS origins and proxy trust only", () => {
 		expect(makeConfig({}, { cors: ["https://EXAMPLE.com/"], proxy: true })).toMatchObject({
 			cors: ["https://example.com"],

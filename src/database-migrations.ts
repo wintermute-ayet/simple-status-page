@@ -77,7 +77,8 @@ const migrations: Migration[] = [
                 retries INTEGER NOT NULL DEFAULT 0,
                 down_count INTEGER NOT NULL DEFAULT 0,
                 degraded_count INTEGER NOT NULL DEFAULT 0,
-                up_count INTEGER NOT NULL DEFAULT 0);
+                up_count INTEGER NOT NULL DEFAULT 0,
+                healthy_count INTEGER NOT NULL DEFAULT 0);
             INSERT INTO monitor_state (monitor_id, last_status, last_value, last_report_at)
             SELECT monitor_id, status, COALESCE(val, 0), COALESCE(STRFTIME('%s', created) * 1000, 0)
             FROM monitor_checks WHERE id IN (SELECT MAX(id) FROM monitor_checks GROUP BY monitor_id);`);
