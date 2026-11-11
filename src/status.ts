@@ -58,6 +58,13 @@ export function renderIndex(
 	// A data block is not executable JavaScript. Escaping '<' prevents </script> breakouts.
 	const data = `<script type="application/json" id="status-snapshot" data-etag="${escapeHtml(etag)}">${json.replace(/</g, "\\u003c")}</script>`;
 	return template
+		.replace(/<html\b(?:[^>"']|"[^"]*"|'[^']*')*>/i, (tag) =>
+			tag
+				.replace(/\s+[^\s="'<>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g, (attribute) =>
+					/^\s+data-default-theme(?:\s|=|$)/i.test(attribute) ? "" : attribute
+				)
+				.replace(/>$/, ` data-default-theme="${escapeHtml(snapshot.public.defaultTheme)}">`)
+		)
 		.replace(/<title>[\s\S]*?<\/title>/i, () => `<title>${title}</title>`)
 		.replace(/<\/head>/i, () => favicon + data + "</head>")
 		.replace("<!--status-logo-->", () => logo);

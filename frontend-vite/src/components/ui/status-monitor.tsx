@@ -32,7 +32,8 @@ export default function StatusMonitor({ data }: { data: Monitor }) {
 					<span aria-hidden="true">{statusIcons[data.status]}</span> {statusLabels[data.status]}
 				</span>
 				<span className="uptime">
-					{uptime === null ? "No data" : `${uptime.toFixed(1)}%`} {data.uptimeWording || "uptime"}
+					{uptime === null ? "No data" : `${uptime.toFixed(1)}%`}{" "}
+					<span className="uptime-wording">{data.uptimeWording || "uptime"}</span>
 				</span>
 			</div>
 			{data.description && <p className="monitor-description">{data.description}</p>}
@@ -56,9 +57,7 @@ export default function StatusMonitor({ data }: { data: Monitor }) {
 						onFocus={() => setSelectedDate(day.date)}
 						onClick={() => setSelectedDate(day.date)}
 						onKeyDown={(event) => navigate(event, index)}
-					>
-						<span aria-hidden="true">{statusIcons[day.status]}</span>
-					</button>
+					/>
 				))}
 			</div>
 			<div className="history-range">

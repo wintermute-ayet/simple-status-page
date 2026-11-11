@@ -5,47 +5,62 @@
 		BlinkMacSystemFont,
 		"Segoe UI",
 		sans-serif;
-	color-scheme: light dark;
-	--background: #f7f8fa;
-	--surface: #fff;
-	--text: #182230;
-	--muted: #536174;
-	--border: #cbd2dc;
-	--link: #164ca4;
-	--up: #166534;
-	--up-bg: #dcfce7;
-	--degraded: #854d0e;
-	--degraded-bg: #fef3c7;
-	--down: #991b1b;
-	--down-bg: #fee2e2;
-	--unknown: #526071;
-	--unknown-bg: #e8ecf1;
-	background: var(--background);
-	color: var(--text);
+	color-scheme: light;
+	--background: #ffffff;
+	--surface: #ffffff;
+	--muted-surface: #f1f5f9;
+	--text: #0f172a;
+	--muted: #64748b;
+	--control-text: #475569;
+	--border: #e2e8f0;
+	--up: #15803d;
+	--degraded: #b45309;
+	--down: #b91c1c;
+	--unknown: #525252;
+	--bar-up: #15803d;
+	--bar-degraded: #b45309;
+	--bar-down: #b91c1c;
+	--bar-unknown: #d4d4d8;
+	--badge-up: #15803d;
+	--badge-degraded: #b45309;
+	--badge-down: #b91c1c;
+	--badge-unknown: #525252;
+	--alert-degraded-bg: #fff7ed;
+	--alert-down-bg: #fef2f2;
+	--focus: #1d4ed8;
 }
-@media (prefers-color-scheme: dark) {
-	:root {
-		--background: #111820;
-		--surface: #1c2531;
-		--text: #eef2f8;
-		--muted: #b4bfd0;
-		--border: #475467;
-		--link: #a5c7ff;
-		--up: #a7f3c1;
-		--up-bg: #123d2a;
-		--degraded: #fde68a;
-		--degraded-bg: #493512;
-		--down: #fecaca;
-		--down-bg: #511f28;
-		--unknown: #d3dce8;
-		--unknown-bg: #344152;
-	}
+:root[data-theme="dark"] {
+	color-scheme: dark;
+	--background: #121212;
+	--surface: #1e1e1e;
+	--muted-surface: #262626;
+	--text: #ededed;
+	--muted: #a3a3a3;
+	--control-text: #d4d4d4;
+	--border: #3a3a3a;
+	--up: #4ade80;
+	--degraded: #fbbf24;
+	--down: #f87171;
+	--unknown: #d4d4d4;
+	--bar-up: #22c55e;
+	--bar-degraded: #f59e0b;
+	--bar-down: #ef4444;
+	--bar-unknown: #3f3f46;
+	--badge-up: #4ade80;
+	--badge-degraded: #fbbf24;
+	--badge-down: #f87171;
+	--badge-unknown: #d4d4d4;
+	--alert-degraded-bg: #2a2114;
+	--alert-down-bg: #2a1616;
+	--focus: #93c5fd;
 }
 * {
 	box-sizing: border-box;
 }
 body {
 	margin: 0;
+	background: var(--background);
+	color: var(--text);
 }
 button,
 input {
@@ -57,7 +72,7 @@ dialog {
 	color: var(--text);
 	background: var(--surface);
 	border: 1px solid var(--border);
-	border-radius: 0.4rem;
+	border-radius: 0.375rem;
 }
 button {
 	padding: 0.55rem 0.9rem;
@@ -68,14 +83,14 @@ button:disabled {
 	opacity: 0.65;
 }
 button:hover:not(:disabled) {
-	border-color: var(--link);
+	border-color: var(--focus);
 }
 :focus-visible {
-	outline: 3px solid var(--link);
-	outline-offset: 3px;
+	outline: 3px solid var(--focus);
+	outline-offset: 2px;
 }
 a {
-	color: var(--link);
+	color: var(--focus);
 	text-underline-offset: 0.2em;
 }
 h1,
@@ -85,23 +100,27 @@ p {
 	margin: 0;
 }
 h1 {
-	font-size: 1.4rem;
-	margin-top: 0.6rem;
+	font-size: 1.35rem;
+	font-weight: 400;
+	margin: 0 0 1rem;
 }
 h2 {
 	font-size: 1.2rem;
-	margin: 2rem 0 0.9rem;
 }
 h3 {
-	font-size: 1rem;
+	font-size: 1.05rem;
+	font-weight: 700;
+	margin-right: auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 p {
 	line-height: 1.6;
 }
 .status-page {
-	max-width: 68rem;
-	margin: 2rem auto;
-	padding: 0 1rem;
+	max-width: 80rem;
+	margin: 0 auto;
+	padding: 2rem;
 }
 .page-header,
 .monitor-header,
@@ -109,39 +128,139 @@ p {
 .dialog-header {
 	display: flex;
 	align-items: center;
-	gap: 0.8rem;
-	justify-content: space-between;
+	gap: 0.75rem;
 	flex-wrap: wrap;
 }
 .page-header {
+	justify-content: space-between;
 	margin-bottom: 1.5rem;
+}
+.header-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	flex-wrap: nowrap;
+	margin-left: auto;
+}
+.header-actions > button {
+	flex-shrink: 0;
+	white-space: nowrap;
+}
+.logo-wrap,
+.logo-plate {
+	max-width: 100%;
 }
 .company-logo {
 	display: block;
-	max-width: min(22rem, 65vw);
-	max-height: 4rem;
+	height: 2.5rem;
+	width: auto;
+	max-width: 100%;
 }
-.summary {
-	padding: 1.1rem;
-	font-size: 1.1rem;
-	font-weight: 600;
+.logo-plate {
+	display: inline-flex;
+	align-items: center;
+	background: #fff;
+	padding: 0.25rem 0.5rem;
+	border-radius: 0.375rem;
+}
+.logo-plate .company-logo {
+	height: 2rem;
+}
+.theme-toggle {
+	display: inline-flex;
+	flex-shrink: 0;
+	gap: 0.125rem;
+	padding: 0.2rem;
+	background: var(--muted-surface);
+	border: 1px solid var(--border);
 	border-radius: 0.5rem;
 }
+.theme-toggle button {
+	padding: 0.3rem 0.55rem;
+	font-size: 0.8rem;
+	font-weight: 500;
+	color: var(--control-text);
+	background: transparent;
+	border-color: transparent;
+}
+.theme-toggle button[aria-pressed="true"] {
+	background: var(--surface);
+	border-color: var(--control-text);
+	color: var(--text);
+	font-weight: 600;
+	box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+.tab-list {
+	display: inline-flex;
+	gap: 0.25rem;
+	padding: 0.25rem;
+	background: var(--muted-surface);
+	border-radius: 0.5rem;
+	margin-bottom: 1.5rem;
+	flex-wrap: wrap;
+}
+.tab {
+	background: transparent;
+	color: var(--control-text);
+	padding: 0.35rem 0.75rem;
+	border-radius: 0.375rem;
+	font-size: 0.875rem;
+	font-weight: 500;
+	border: 1px solid transparent;
+}
+.tab-active {
+	background: var(--surface);
+	color: var(--text);
+	border-color: var(--border);
+	box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+.tab-count {
+	display: inline-block;
+	margin-left: 0.35rem;
+	padding: 0 0.35rem;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-size: 0.75rem;
+}
 .status-up {
-	color: var(--up);
-	background: var(--up-bg);
+	--status-color: var(--up);
+	--badge-color: var(--badge-up);
 }
 .status-degraded {
-	color: var(--degraded);
-	background: var(--degraded-bg);
+	--status-color: var(--degraded);
+	--badge-color: var(--badge-degraded);
 }
 .status-down {
-	color: var(--down);
-	background: var(--down-bg);
+	--status-color: var(--down);
+	--badge-color: var(--badge-down);
 }
 .status-unknown {
-	color: var(--unknown);
-	background: var(--unknown-bg);
+	--status-color: var(--unknown);
+	--badge-color: var(--badge-unknown);
+}
+.summary {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	padding: 0.9rem 1rem;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-left: 4px solid var(--status-color);
+	border-radius: 0.5rem;
+	font-weight: 600;
+	margin-bottom: 0.75rem;
+}
+.summary-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	width: 1.3rem;
+	height: 1.3rem;
+	border: 1px solid currentColor;
+	border-radius: 50%;
+	color: var(--status-color);
+	font-size: 0.85rem;
 }
 .last-updated,
 .muted,
@@ -153,43 +272,48 @@ footer {
 	font-size: 0.85rem;
 }
 .last-updated {
-	margin: 0.7rem 0 1.2rem;
+	margin-bottom: 1rem;
 }
-.section-links {
-	display: flex;
-	gap: 1.5rem;
-	padding-bottom: 1rem;
+.group-title {
+	font-size: 1.75rem;
+	font-weight: 700;
 	border-bottom: 1px solid var(--border);
+	padding-bottom: 0.5rem;
+	margin: 2.5rem 0 1rem;
 }
 .card {
 	background: var(--surface);
 	border: 1px solid var(--border);
 	border-radius: 0.5rem;
 	padding: 1rem;
-	margin-bottom: 0.8rem;
-}
-.monitor-header h3 {
-	margin-right: auto;
-}
-.current-status {
-	padding: 0.2rem 0.45rem;
-	border-radius: 0.3rem;
-	font-size: 0.85rem;
-	font-weight: 600;
+	margin-bottom: 0.75rem;
+	box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
 }
 .uptime {
+	white-space: nowrap;
 	font-size: 0.9rem;
+}
+.current-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	border: 1px solid currentColor;
+	border-radius: 999px;
+	padding: 0.1rem 0.45rem;
+	font-size: 0.8rem;
+	font-weight: 600;
+	color: var(--badge-color);
 	white-space: nowrap;
 }
 .monitor-description {
-	margin: 0.4rem 0 0.8rem;
+	margin-top: 0.4rem;
 }
 .history {
 	display: grid;
 	grid-auto-flow: column;
 	grid-auto-columns: minmax(0, 1fr);
 	gap: 2px;
-	margin-top: 0.8rem;
+	margin-top: 0.75rem;
 }
 .history-day {
 	min-width: 0;
@@ -197,33 +321,42 @@ footer {
 	border: 0;
 	border-radius: 2px;
 	padding: 0;
-	font-size: clamp(0.35rem, 1vw, 0.7rem);
-	font-weight: 700;
+	background: var(--bar-unknown);
 }
-.history-day:focus-visible {
-	position: relative;
-	z-index: 1;
+.history-day.status-up {
+	background: var(--bar-up);
+}
+.history-day.status-degraded {
+	background: var(--bar-degraded);
+}
+.history-day.status-down {
+	background: var(--bar-down);
 }
 .history-day:hover {
-	outline: 2px solid var(--link);
+	outline: 2px solid var(--focus);
+}
+.history-day:focus-visible {
+	outline: 3px solid var(--focus);
+	position: relative;
+	z-index: 1;
 }
 .history-range {
 	display: flex;
 	justify-content: space-between;
-	margin: 0.4rem 0;
+	margin: 0.4rem 0 0.2rem;
 }
 .day-details {
-	min-height: 1.6em;
+	min-height: 1.4em;
 	overflow-wrap: anywhere;
 }
 .incident-header {
 	margin-bottom: 0.5rem;
 }
 .incident-down {
-	border-inline-start: 4px solid var(--down);
+	border-left: 4px solid var(--down);
 }
 .incident-degraded {
-	border-inline-start: 4px solid var(--degraded);
+	border-left: 4px solid var(--degraded);
 }
 .whitespace-pre-line {
 	white-space: pre-line;
@@ -232,15 +365,21 @@ footer {
 	line-height: 1.6;
 }
 .notice {
+	display: flex;
+	align-items: baseline;
+	gap: 0.6rem;
 	padding: 1rem;
+	background: var(--surface);
 	border: 1px solid var(--border);
-	border-radius: 0.4rem;
+	border-radius: 0.5rem;
 	margin: 1rem 0;
 }
 .api-unreachable {
+	border-left: 4px solid var(--down);
+}
+.notice-icon {
 	color: var(--down);
-	background: var(--down-bg);
-	border-color: var(--down);
+	font-weight: 700;
 }
 dialog {
 	max-width: 28rem;
@@ -251,10 +390,8 @@ dialog::backdrop {
 	background: rgb(0 0 0 / 60%);
 }
 .dialog-header {
+	justify-content: space-between;
 	margin-bottom: 0.7rem;
-}
-.dialog-header h2 {
-	margin: 0;
 }
 dialog form {
 	display: grid;
@@ -270,17 +407,55 @@ dialog [role="alert"] {
 }
 footer {
 	text-align: center;
+	font-size: 0.75rem;
 	padding: 2rem 0 0.5rem;
 }
 @media (max-width: 40rem) {
 	.status-page {
-		margin-top: 1rem;
+		padding: 1rem;
 	}
-	.monitor-header h3,
-	.incident-header h3 {
+	.header-actions {
 		flex-basis: 100%;
+		justify-content: flex-end;
+		gap: 0.5rem;
+	}
+	.company-logo {
+		height: 2rem;
+	}
+	.logo-plate .company-logo {
+		height: 1.75rem;
+	}
+	h1 {
+		font-size: 1.25rem;
+	}
+	.group-title {
+		font-size: 1.5rem;
+	}
+	h3 {
+		font-size: 0.95rem;
+	}
+	.monitor-header {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 0.4rem;
+	}
+	.monitor-header h3 {
+		grid-column: 1 / -1;
+		margin-right: 0;
+	}
+	.monitor-header .current-status {
+		justify-self: start;
+	}
+	.monitor-header .uptime {
+		justify-self: end;
+	}
+	.uptime-wording {
+		display: none;
 	}
 	.history {
 		gap: 1px;
+	}
+	.history-day {
+		height: 2rem;
 	}
 }

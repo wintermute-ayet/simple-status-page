@@ -15,6 +15,8 @@ configuration, and can be deployed with Docker. The frontend uses native HTML co
 - **Automatic Database Migrations:** Persisted monitor state and daily uptime history in SQLite.
 - **Snapshot Frontend:** Initial status without an API call, conditional polling and accessible
   history.
+- **Light and Dark Themes:** Light by default, with a saved Light/Dark/System choice, theme-aware
+  logos and keyboard-accessible status/incident tabs.
 
 Unimplemented features are listed in the [roadmap](#roadmap).
 
@@ -91,7 +93,9 @@ regexps and groups referencing missing monitors are errors.
 
 | Block/key                | Meaning                                                                                                                                                            |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `public`                 | SVG favicon/logo, company name, public base URL and legacy refresh setting. This block is public; put no credentials here.                                         |
+| `public`                 | SVG favicon/logos, default theme, company name, public base URL and legacy refresh setting. This block is public; put no credentials here.                         |
+| `public.logoDark`        | Optional SVG string for dark mode, default `""`. Without it, the normal logo sits on a light rounded plate in dark mode.                                           |
+| `public.defaultTheme`    | `light`, `dark` or `system`, default `light`. A visitor's saved theme choice takes precedence.                                                                     |
 | `public.basedomain`      | Absolute HTTP(S) base URL used in mail links; independent of request Host headers. Use the external HTTPS URL behind nginx.                                        |
 | `public.refreshInterval` | Legacy value in seconds, retained for API compatibility. The bundled frontend polls every 45 seconds while visible.                                                |
 | `salt`                   | Private subscription-signing secret; see [upgrade notes](#upgrade-notes).                                                                                          |
@@ -439,8 +443,12 @@ Global rejection/exception handlers close the service gracefully. Fatal shutdown
 SQLite within a 10-second deadline; Compose allows 15 seconds before stopping it.
 
 The CSP restricts scripts and styles to same-origin files; the frontend needs no inline exception.
-Other headers prevent framing and MIME sniffing and suppress referrer information. HSTS is sent only
-over HTTPS, including HTTPS reported by a trusted proxy.
+The small external classic script `/theme-init.js` runs in the document head before first paint. It
+reads the saved `status-theme` localStorage choice, falls back to the configured default, and sets
+`data-theme` on `<html>` without inline scripts or style attributes. Storage errors fall back to the
+configured default; media-query errors fall back to light. Other headers prevent framing and MIME
+sniffing and suppress referrer information. HSTS is sent only over HTTPS, including HTTPS reported
+by a trusted proxy.
 
 ### Dependency audit follow-up
 
@@ -492,11 +500,20 @@ seconds. The page shows the snapshot's last-updated time and an "API unreachable
 preserving the last good data and retrying automatically. Development falls back to the same
 endpoint when the injected JSON is absent or invalid.
 
-Daily bars include status symbols, date/uptime/degraded labels and a shared visible detail line per
-monitor. Tab enters the history; arrow keys, Home and End select days. No-data days are explicitly
-labelled and excluded from the uptime average. Colours follow `prefers-color-scheme`; incident text
-remains escaped with line breaks. The subscription dialog loads on demand and starts with an empty
-email field.
+Daily bars use solid status colours with empty interiors. Status badges include text and icons; each
+day also exposes its date, status, uptime and, when non-zero, degraded time through an accessible
+label and a shared visible detail line per monitor. Tab enters the history; arrow keys, Home and End select
+days. No-data days are explicitly labelled and excluded from the uptime average. The Status Overview
+and Incident List tabs support arrow keys, Home and End. Incident text remains escaped with line
+breaks. The subscription dialog loads on demand and starts with an empty email field.
+
+The header's Light/Dark/System theme control is always available, including when subscriptions are
+disabled. The default is light; `public.defaultTheme` can select dark or the operating system's
+preference instead. A visitor's choice is saved under localStorage key `status-theme` and applied
+before paint on later visits. System follows `prefers-color-scheme` and updates when the operating
+system changes. In dark mode `public.logoDark` supplies an optional SVG variant; otherwise the
+normal `public.logo` remains readable on a light rounded plate. An empty `public.logo` hides the
+logo in both themes. The configured favicon works in either theme.
 
 ### Measured Overhaul Results
 

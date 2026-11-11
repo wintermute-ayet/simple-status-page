@@ -12,6 +12,21 @@ describe("configuration validation", () => {
 		expect(config.dailyThresholds).toEqual({ down: 0.001, degraded: 0.005 });
 		expect(config.cors).toEqual([]);
 		expect(config.proxy).toBe(false);
+		expect(config.public.defaultTheme).toBe("light");
+		expect(config.public.logoDark).toBe("");
+	});
+	it.each(["light", "dark", "system"])("accepts the %s theme and a dark logo", (defaultTheme) => {
+		const logoDark = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+		expect(makeConfig({}, { public: { defaultTheme, logoDark } }).public).toMatchObject({
+			defaultTheme,
+			logoDark
+		});
+	});
+	it("rejects invalid theme preferences and non-string dark logos", () => {
+		for (const defaultTheme of ["invalid", "Dark", "", null, 123, true])
+			expect(() => makeConfig({}, { public: { defaultTheme } })).toThrow(/public.defaultTheme/);
+		for (const logoDark of [123, true, {}, []])
+			expect(() => makeConfig({}, { public: { logoDark } })).toThrow(/public.logoDark/);
 	});
 	it("requires at least 32 salt characters only when SMTP is configured", () => {
 		const smtp = { host: "smtp.example.com", from: "test-sender", port: 587 };

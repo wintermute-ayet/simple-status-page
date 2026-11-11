@@ -10,6 +10,8 @@ public: # exposed by the public API; never put credentials in this block
   logo:
     '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="44" viewBox="0 0 240 44"><text
     x="0" y="34" font-size="34" fill="#3c6bc0">Example</text></svg>'
+  logoDark: "" # optional SVG for dark mode; otherwise logo appears on a light rounded plate
+  defaultTheme: "light" # light (default), dark, or system; visitors can save their own choice
   companyName: "Example Company" # page title/footer and mail subject; default "Status"
   refreshInterval: 900 # legacy API setting in seconds; bundled frontend polls every 45 s
   basedomain: "https://example.com" # external HTTP(S) base URL for mail links; no credentials

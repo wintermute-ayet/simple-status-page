@@ -20,5 +20,6 @@ export function averageUptime(history: UptimeDay[]): number | null {
 
 export function dayDetails(day: UptimeDay): string {
 	if (day.status === "unknown" || day.uptime === null) return `${day.date}: no data`;
-	return `${day.date}: ${statusLabels[day.status]}, ${day.uptime.toFixed(2)}% uptime, ${(day.degraded ?? 0).toFixed(2)}% degraded`;
+	const degraded = day.degraded ?? 0;
+	return `${day.date}: ${statusLabels[day.status]}, ${day.uptime.toFixed(2)}% uptime${degraded > 0 ? `, ${degraded.toFixed(2)}% degraded` : ""}`;
 }

@@ -2,7 +2,11 @@ import { Fragment, lazy, Suspense, useEffect, useRef, useState } from "react";
 import StatusMonitor from "@/components/ui/status-monitor";
 import IncidentList from "@/components/ui/incident-list";
 import SvgFavicon from "@/components/svg-favicon";
+import Tabs from "@/components/ui/tabs";
+import ThemeToggle from "@/components/ui/theme-toggle";
 import { useStatusSnapshot } from "@/lib/use-status-snapshot";
+import { useTheme } from "@/lib/use-theme";
+import { selectLogo } from "@/lib/theme";
 
 const SubscribeDialog = lazy(() => import("@/components/subscribe-dialog"));
 const results: Record<string, string> = {
@@ -14,6 +18,10 @@ const results: Record<string, string> = {
 
 export default function StatusPage() {
 	const { snapshot, unreachable } = useStatusSnapshot();
+	const { preference, resolved, setPreference } = useTheme(
+		snapshot?.public.defaultTheme ?? "light"
+	);
+	const logo = snapshot ? selectLogo(snapshot.public, resolved) : undefined;
 	const [subscribeOpen, setSubscribeOpen] = useState(false);
 	const subscribeButton = useRef<HTMLButtonElement>(null);
 	const [result] = useState(() =>
@@ -46,22 +54,25 @@ export default function StatusPage() {
 		<main className="status-page">
 			{snapshot && <SvgFavicon svgMarkup={snapshot.public.favicon} />}
 			<header className="page-header">
-				<div>
-					{snapshot?.public.logo && (
+				{logo?.src && (
+					<div className={logo.plate ? "logo-plate" : "logo-wrap"}>
 						<img
 							className="company-logo"
-							src={`data:image/svg+xml,${encodeURIComponent(snapshot.public.logo)}`}
-							alt={`${snapshot.public.companyName} logo`}
+							src={`data:image/svg+xml,${encodeURIComponent(logo.src)}`}
+							alt={`${snapshot?.public.companyName} logo`}
 						/>
-					)}
-					<h1>{snapshot?.public.companyName} Service Status</h1>
-				</div>
-				{snapshot?.public.subscriptionsEnabled && (
-					<button ref={subscribeButton} type="button" onClick={() => setSubscribeOpen(true)}>
-						Subscribe
-					</button>
+					</div>
 				)}
+				<div className="header-actions">
+					<ThemeToggle preference={preference} onChange={setPreference} />
+					{snapshot?.public.subscriptionsEnabled && (
+						<button ref={subscribeButton} type="button" onClick={() => setSubscribeOpen(true)}>
+							Subscribe
+						</button>
+					)}
+				</div>
 			</header>
+			<h1>Service Status</h1>
 			{result && results[result] && (
 				<p className="notice" role={result.endsWith("error") ? "alert" : "status"}>
 					{results[result]}
@@ -69,47 +80,64 @@ export default function StatusPage() {
 			)}
 			{unreachable && (
 				<p className="notice api-unreachable" role="alert">
-					API unreachable.{" "}
-					{snapshot ? "Showing the last available status. " : "Status is unavailable. "}
-					Retrying automatically when this tab is visible.
+					<span className="notice-icon" aria-hidden="true">
+						!
+					</span>
+					<span>
+						API unreachable.{" "}
+						{snapshot ? "Showing the last available status. " : "Status is unavailable. "}
+						Retrying automatically when this tab is visible.
+					</span>
 				</p>
 			)}
 			{snapshot ? (
-				<>
-					<div className={`summary status-${summaryStatus}`} role="status">
-						<span aria-hidden="true">
-							{summaryStatus === "up" ? "✓" : summaryStatus === "unknown" ? "?" : "!"}
-						</span>{" "}
-						{summary}
-					</div>
-					<p className="last-updated">
-						Last updated:{" "}
-						<time dateTime={new Date(snapshot.updatedAt).toISOString()}>
-							{new Date(snapshot.updatedAt).toLocaleString()}
-						</time>
-						{" · "}Refreshes every 45 seconds while visible
-					</p>
-					<nav className="section-links" aria-label="Status sections">
-						<a href="#services">Services</a>
-						<a href="#incidents">Incidents ({activeIncidents} active)</a>
-					</nav>
-					<section id="services" aria-label="Services">
-						{snapshot.groups.map((group) => (
-							<Fragment key={group.name}>
-								<h2 className="group-title">{group.name}</h2>
-								{group.monitors.map((id) => {
-									const monitor = snapshot.monitors.find((entry) => entry.id === id);
-									return monitor ? <StatusMonitor key={id} data={monitor} /> : null;
-								})}
-							</Fragment>
-						))}
-						{empty && <p>No services are published yet.</p>}
-					</section>
-					<section id="incidents" aria-labelledby="incidents-title">
-						<h2 id="incidents-title">Incidents</h2>
-						<IncidentList data={snapshot.incidents} />
-					</section>
-				</>
+				<Tabs
+					label="Status sections"
+					tabs={[
+						{
+							id: "status",
+							label: "Status Overview",
+							content: (
+								<>
+									<div className={`summary status-${summaryStatus}`} role="status">
+										<span className="summary-icon" aria-hidden="true">
+											{summaryStatus === "up" ? "✓" : summaryStatus === "unknown" ? "?" : "!"}
+										</span>
+										{summary}
+									</div>
+									<p className="last-updated">
+										Last updated:{" "}
+										<time dateTime={new Date(snapshot.updatedAt).toISOString()}>
+											{new Date(snapshot.updatedAt).toLocaleString()}
+										</time>
+										{" · "}Refreshes every 45 seconds while visible
+									</p>
+									<section id="services" aria-label="Services">
+										{snapshot.groups.map((group) => (
+											<Fragment key={group.name}>
+												<h2 className="group-title">{group.name}</h2>
+												{group.monitors.map((id) => {
+													const monitor = snapshot.monitors.find((entry) => entry.id === id);
+													return monitor ? <StatusMonitor key={id} data={monitor} /> : null;
+												})}
+											</Fragment>
+										))}
+										{empty && <p>No services are published yet.</p>}
+									</section>
+								</>
+							)
+						},
+						{
+							id: "incidents",
+							label: (
+								<>
+									Incident List <span className="tab-count">{activeIncidents}</span>
+								</>
+							),
+							content: <IncidentList data={snapshot.incidents} />
+						}
+					]}
+				/>
 			) : (
 				!unreachable && <p role="status">Loading service status…</p>
 			)}
@@ -118,7 +146,9 @@ export default function StatusPage() {
 					<SubscribeDialog onClose={closeSubscribe} />
 				</Suspense>
 			)}
-			<footer>{snapshot?.public.companyName} Service Status</footer>
+			<footer>
+				({new Date().getFullYear()}) {snapshot?.public.companyName} Service Status App
+			</footer>
 		</main>
 	);
 }

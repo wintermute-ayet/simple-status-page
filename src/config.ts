@@ -3,6 +3,7 @@ import yaml from "js-yaml";
 
 export type MonitorStatus = "up" | "degraded" | "down" | "unknown";
 export type IncidentType = "down" | "degraded";
+export type ThemePreference = "light" | "dark" | "system";
 export interface IncidentRule {
 	createAfter: number;
 	resolveAfter: number;
@@ -44,6 +45,8 @@ export interface Config {
 	public: {
 		favicon: string;
 		logo: string;
+		logoDark: string;
+		defaultTheme: ThemePreference;
 		companyName: string;
 		refreshInterval: number;
 		basedomain: string;
@@ -128,10 +131,16 @@ export function validateConfig(
 	const publicConfig = object(root.public ?? {}, "public", [
 		"favicon",
 		"logo",
+		"logoDark",
+		"defaultTheme",
 		"companyName",
 		"refreshInterval",
 		"basedomain"
 	]);
+	const defaultTheme =
+		publicConfig.defaultTheme === undefined ? "light" : publicConfig.defaultTheme;
+	if (defaultTheme !== "light" && defaultTheme !== "dark" && defaultTheme !== "system")
+		throw new Error("public.defaultTheme must be light, dark or system");
 	const database = object(root.database, "database", ["path"]);
 	const ids = new Set<number>();
 	const tokens = new Set<string>();
@@ -299,6 +308,8 @@ export function validateConfig(
 		public: {
 			favicon: text(publicConfig.favicon, "public.favicon", ""),
 			logo: text(publicConfig.logo, "public.logo", ""),
+			logoDark: text(publicConfig.logoDark, "public.logoDark", ""),
+			defaultTheme,
 			companyName: text(publicConfig.companyName, "public.companyName", "Status"),
 			refreshInterval: integer(publicConfig.refreshInterval, "public.refreshInterval", 900, 0),
 			basedomain: httpUrl(

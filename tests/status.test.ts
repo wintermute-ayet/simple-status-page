@@ -9,7 +9,7 @@ import { createIncident, initializeDatabase } from "../src/database";
 import migrateDatabase from "../src/database-migrations";
 import type { Config } from "../src/config";
 import type { HttpRequest } from "../src/monitors";
-import type { StatusSnapshot } from "../src/status";
+import { renderIndex, type StatusSnapshot } from "../src/status";
 import { close, listen, makeConfig, rawConfig, testToken } from "./helpers";
 
 let db: Database;
@@ -233,6 +233,46 @@ describe("cached status endpoint", () => {
 });
 
 describe("startup HTML injection", () => {
+	it.each(["light", "dark", "system"] as const)(
+		"renders exactly one %s default theme while preserving HTML attributes",
+		(defaultTheme) => {
+			const config = makeConfig({}, { public: { defaultTheme } });
+			const data: StatusSnapshot = {
+				public: { ...config.public, subscriptionsEnabled: false },
+				groups: [],
+				monitors: [],
+				incidents: [],
+				updatedAt: 0
+			};
+			for (const opening of [
+				'<html lang="en" dir="ltr">',
+				'<html lang="en" data-default-theme="light" dir="ltr">',
+				'<html lang="en" dir="ltr" data-note="a > b" data-default-theme="light">',
+				'<html lang="en" data-default-theme=\'dark\' dir="ltr" data-default-theme=system>'
+			]) {
+				const html = renderIndex(
+					template.replace(/<html[^>]*>/, opening),
+					data,
+					JSON.stringify(data),
+					'W/"test"'
+				);
+				const tag = html.match(/<html\b(?:[^>"']|"[^"]*"|'[^']*')*>/)![0];
+				expect(tag).toContain(`data-default-theme="${defaultTheme}"`);
+				expect(tag.match(/data-default-theme/g)).toHaveLength(1);
+				expect(tag).toContain('lang="en"');
+				expect(tag).toContain('dir="ltr"');
+				if (opening.includes("data-note")) expect(tag).toContain('data-note="a > b"');
+				expect(html).toContain('<script src="/theme-init.js"></script>');
+			}
+		}
+	);
+	it("uses light as the default theme in injected HTML and the public snapshot", async () => {
+		const url = await start();
+		const html = await (await fetch(url + "/")).text();
+		expect(html).toContain('data-default-theme="light"');
+		expect(html).toContain('<script src="/theme-init.js"></script>');
+		expect(injected(html).public).toMatchObject({ defaultTheme: "light", logoDark: "" });
+	});
 	it("escapes titles and JSON and embeds SVG only as data images, including Unicode", async () => {
 		const name = 'Example </title><script>alert("unsafe")</script> & service';
 		const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>Example ✓ </script></text></svg>';

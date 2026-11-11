@@ -1,3 +1,5 @@
+import { isThemePreference, type ThemePreference } from "./theme";
+
 export type MonitorStatus = "up" | "degraded" | "down" | "unknown";
 
 export interface UptimeDay {
@@ -33,6 +35,8 @@ export interface BootstrapSnapshot {
 	public: {
 		favicon: string;
 		logo: string;
+		logoDark: string;
+		defaultTheme: ThemePreference;
 		companyName: string;
 		refreshInterval: number;
 		subscriptionsEnabled: boolean;
@@ -106,6 +110,8 @@ export function parseSnapshot(value: unknown): BootstrapSnapshot | undefined {
 		typeof config.companyName !== "string" ||
 		typeof config.favicon !== "string" ||
 		typeof config.logo !== "string" ||
+		typeof config.logoDark !== "string" ||
+		!isThemePreference(config.defaultTheme) ||
 		!finite(config.refreshInterval) ||
 		typeof config.subscriptionsEnabled !== "boolean" ||
 		!timestamp(value.updatedAt) ||

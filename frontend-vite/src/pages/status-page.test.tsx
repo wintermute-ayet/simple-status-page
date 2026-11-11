@@ -143,7 +143,13 @@ it("explains missing days, excludes them from uptime, and exposes details by key
 	const days = container.querySelectorAll<HTMLButtonElement>(".history-day");
 	expect(days[0].getAttribute("aria-label")).toBe("2030-01-01: no data");
 	expect(days[1].title).toContain("50.00% uptime, 10.00% degraded");
+	expect(days[2].getAttribute("aria-label")).toBe("2030-01-03: Operational, 100.00% uptime");
+	expect(days[2].title).toBe("2030-01-03: Operational, 100.00% uptime");
+	expect(container.querySelector(".day-details")?.textContent).toBe(
+		"2030-01-03: Operational, 100.00% uptime"
+	);
 	expect(container.querySelector(".current-status")?.textContent).toContain("Operational");
+	expect([...days].every((day) => day.textContent === "")).toBe(true);
 	act(() => days[2].focus());
 	act(() => days[2].dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
 	expect(document.activeElement).toBe(days[0]);
@@ -220,5 +226,61 @@ it("reads subscription results from the query string and hides subscription UI w
 	vi.stubGlobal("fetch", vi.fn());
 	act(() => root.render(createElement(StatusPage)));
 	expect(container.textContent).toContain("Successfully activated your subscription");
-	expect(container.querySelector(".page-header button")).toBeNull();
+	expect(
+		[...container.querySelectorAll(".page-header button")].some(
+			(button) => button.textContent === "Subscribe"
+		)
+	).toBe(false);
+	expect(container.querySelectorAll(".page-header [aria-pressed]")).toHaveLength(3);
+});
+
+it("restores the incident tab with roving focus and keyboard activation", () => {
+	const snapshot = exampleSnapshot();
+	snapshot.incidents.push({
+		id: 1,
+		monitor_id: 1,
+		monitor_name: "Preloaded service",
+		type: "down",
+		status: "active",
+		message: "Investigating an outage.",
+		created: "2030-01-03 00:00:00",
+		modified: "2030-01-03 00:00:00"
+	});
+	injectSnapshot(snapshot);
+	vi.stubGlobal("fetch", vi.fn());
+	act(() => root.render(createElement(StatusPage)));
+	const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+	expect(tabs).toHaveLength(2);
+	expect(tabs[0].tabIndex).toBe(0);
+	expect(tabs[1].tabIndex).toBe(-1);
+	expect(tabs[1].querySelector(".tab-count")?.textContent).toBe("1");
+	expect(container.querySelectorAll('[role="tabpanel"]')).toHaveLength(1);
+	expect(container.textContent).not.toContain("Investigating an outage.");
+	act(() => tabs[0].focus());
+	act(() =>
+		tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }))
+	);
+	expect(document.activeElement).toBe(tabs[1]);
+	expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+	expect(tabs[0].tabIndex).toBe(-1);
+	expect(tabs[1].tabIndex).toBe(0);
+	const panel = container.querySelector<HTMLElement>('[role="tabpanel"]')!;
+	expect(panel.id).toBe(tabs[1].getAttribute("aria-controls"));
+	expect(panel.getAttribute("aria-labelledby")).toBe(tabs[1].id);
+	expect(panel.tabIndex).toBe(0);
+	expect(panel.textContent).toContain("Investigating an outage.");
+	expect(container.querySelector(".monitor")).toBeNull();
+	for (const [key, from, to] of [
+		["ArrowRight", 1, 0],
+		["ArrowLeft", 0, 1],
+		["Home", 1, 0],
+		["End", 0, 1]
+	] as const) {
+		act(() => tabs[from].dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })));
+		expect(document.activeElement).toBe(tabs[to]);
+	}
+	act(() => tabs[0].click());
+	expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+	expect(container.querySelector(".monitor")).not.toBeNull();
+	expect(fetch).not.toHaveBeenCalled();
 });
